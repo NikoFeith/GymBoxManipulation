@@ -44,7 +44,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # --- Environment Parameters ---
         self.table_height = 0.0 # Z-coordinate of table surface
-        self.fixed_locations = self._define_locations() # List of [x, y, z] poses on table surface
         # Gripper parameters (adjust based on chosen gripper URDF)
         self.gripper_open_value = 0.08 # Example: Max joint value for open
         self.gripper_closed_value = 0.0  # Example: Min joint value for closed
@@ -63,8 +62,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # --- Asset Paths ---
         self.assets_path = os.path.join(os.path.dirname(__file__), '..', 'assets')
-        self.table_urdf_path = os.path.join(self.assets_path, "urdf/objects/table.urdf") # TODO: Get table URDF
-        self.block_urdf_path = os.path.join(self.assets_path, "urdf/objects/cube.urdf")  # TODO: Get block URDF
         if self.robot_type == 'ur3e':
             self.robot_urdf_path = os.path.join(self.assets_path, "urdf/robots/ur3e_robotiq/ur3e_robotiq_140.urdf") # TODO: Verify filename
         elif self.robot_type == 'panda':
@@ -74,8 +71,15 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # --- Load Static Assets ---
         self.plane_id = p.loadURDF("plane.urdf", physicsClientId=self.client)
-        self.table_id = p.loadURDF(self.table_urdf_path, basePosition=[0.5, 0, 0], useFixedBase=True, physicsClientId=self.client) # Example position
+        # Define table position (adjust x, y, z as needed)
+        table_start_pos = [0.5, 0, 0]  # Example: Place center at x=0.5, y=0
+        self.table_id = p.loadURDF("table/table.urdf",
+                                   basePosition=table_start_pos,
+                                   useFixedBase=True,
+                                   physicsClientId=self.client)
 
+        self.table_height = p.getAABB(self.table_id)[1][2]  # More reliable: Get max Z from AABB
+        self.fixed_locations = self._define_locations() # List of [x, y, z] poses on table surface
         # --- Robot Setup ---
         self.robot_start_pos = [0, 0, 0.63] # Adjust Z based on table height + robot base
         self.robot_start_ori = p.getQuaternionFromEuler([0, 0, 0])
@@ -106,7 +110,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         locations = []
         table_z = self.table_height # Assume table URDF origin is at table height
         spacing = 0.15
-        center_x = 0.5 # Match table position
+        center_x = 0.4 # Match table position
         center_y = 0.0
         rows = int(np.ceil(np.sqrt(self.num_locations)))
         cols = int(np.ceil(self.num_locations / rows))
@@ -188,8 +192,11 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             pos = self.fixed_locations[loc_idx]
             block_start_ori = p.getQuaternionFromEuler([0, 0, random.uniform(0, 2*np.pi)]) # Random Z rot
             # Add Z offset = half block height + tiny buffer
-            block_id = p.loadURDF(self.block_urdf_path, [pos[0], pos[1], pos[2] + 0.025], block_start_ori, physicsClientId=self.client)
-            # TODO: Set block color/visuals if needed for distinction
+            block_id = p.loadURDF("cube.urdf",
+                                  pos,
+                                  block_start_ori,
+                                  globalScaling=0.05,  # IMPORTANT: Scale the default cube (which is 1x1x1)
+                                  physicsClientId=self.client)
             # p.changeVisualShape(block_id, -1, rgbaColor=[...])
             self.block_ids.append(block_id)
 
