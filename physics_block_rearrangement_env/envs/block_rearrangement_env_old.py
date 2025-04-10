@@ -94,8 +94,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.robot_id = p.loadURDF(self.robot_urdf_path, self.robot_start_pos, self.robot_start_ori, useFixedBase=True, physicsClientId=self.client)
         self.ee_link_index = self._find_link_index("tool0")
         self.gripper_joint_indices = self._find_joint_indices(["finger_joint"])
-        print("Joint states before moving: ",
-              p.getJointStates(self.robot_id, [2, 3, 4, 5, 6, 7, 12, 14, 16, 17, 19, 21]))
 
         # Initialize lists to store the information
         self.arm_joint_indices = []
