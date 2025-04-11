@@ -25,7 +25,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     """
     metadata = {'render_modes': ['human', 'rgb_array'], 'render_fps': 30}
 
-    def __init__(self, render_mode=None, use_gui=False, num_blocks=3, num_dump_locations=1, robot_type='ur3e'):
+    def __init__(self, render_mode=None, use_gui=False, num_blocks=3, num_dump_locations=1, robot_type='panda'):
         super().__init__()
         self.num_blocks = num_blocks
         # Assuming one target location per block + 1 dump location
@@ -82,8 +82,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         if self.robot_type == 'ur3e':
             self.robot_urdf_path = os.path.join(self.assets_path, "urdf/robots/ur3e_robotiq/ur3e_robotiq_140.urdf")
+            self.finger_joint_name = ''
         elif self.robot_type == 'panda':
-             self.robot_urdf_path = os.path.join(self.assets_path, "urdf/robots/panda/panda.urdf") # TODO: Get Panda URDF
+             self.robot_urdf_path = "franka_panda/panda.urdf"
         else:
             raise ValueError(f"Unsupported robot_type: {self.robot_type}")
 
