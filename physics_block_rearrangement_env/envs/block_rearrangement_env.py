@@ -124,7 +124,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.num_actions = self.num_blocks + self.num_locations + self.num_dump_locations
         self.action_space = spaces.Discrete(self.num_actions)
         print(f"Initialized Env: {self.num_blocks} blocks, {self.num_locations} targets, {self.num_dump_locations} dump -> {self.num_actions} actions")
-        self.image_size = 84
+        self.image_size = 56
         self.observation_space = spaces.Box(low=0, high=255, shape=(self.image_size, self.image_size, 3), dtype=np.uint8)
 
         # --- Task Parameters ---
