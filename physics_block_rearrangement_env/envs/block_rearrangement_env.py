@@ -37,18 +37,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.use_gui = use_gui or (render_mode == 'human')
         self.robot_type = robot_type
 
-        # --- Action Space Definition ---
-        # N pick actions, M place-target actions, 1 place-dump action
-        self.num_actions = self.num_blocks + self.num_locations + self.num_dump_locations
-        self.action_space = spaces.Discrete(self.num_actions)
-        print(f"Initialized Env: {self.num_blocks} blocks, {self.num_locations} targets, {self.num_dump_locations} dump -> {self.num_actions} actions")
-
-        # --- Observation Space ---
-        self.image_size = 56
-        self.observation_space = spaces.Box(low=0, high=255,
-                                            shape=(self.image_size, self.image_size, 3),
-                                            dtype=np.uint8)
-
         # --- Physics and Sim Parameters ---
         self.gravity = [0, 0, -9.81]
         self.timestep = 1./240. # Default PyBullet timestep
@@ -59,35 +47,15 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # --- Robot Parameters ---
         # TCP offset from tool0/flange (NEEDS VERIFICATION FOR YOUR GRIPPER MODEL)
-        self.tcp_offset_pos = [0.0, 0.0, 0.200] # Example offset (e.g., 20cm) - TUNE THIS
+        self.tcp_offset_pos = [0.0, 0.0, 0.200]  # Example offset (e.g., 20cm) - TUNE THIS
         self.tcp_offset_orn = p.getQuaternionFromEuler([0, 0, 0])
         self.inv_tcp_offset_pos, self.inv_tcp_offset_orn = p.invertTransform(
             self.tcp_offset_pos, self.tcp_offset_orn)
 
         # Gripper joint values (NEEDS VERIFICATION based on URDF limits and testing)
-        self.gripper_open_value = 0.0   # Assuming 0 is open based on previous discussion
-        self.gripper_closed_value = 0.695 # Assuming 0.7 is closed (use slightly less, e.g., 0.68?)
-        self.gripper_force = 300.0 # Increased force - TUNE THIS
-
-        # --- Task Parameters ---
-        self.table_height = 0.0 # Will be determined after loading table
-        self.block_scale = 0.05
-        self.block_half_height = self.block_scale / 2.0
-        self.grasp_approach_dist = 0.03 # Height above table for grasp attempt
-        self.release_dist = 0.03 # Height above table/target for release
-        self.safe_raise_height_abs = 0.1 # Absolute Z height relative to table for "Raise" primitive
-
-        # Define fixed colors (ensure length >= num_blocks)
-        # Example: Red, Green, Blue, Yellow, Magenta
-        self.block_colors_rgba = [
-            [0.8, 0.1, 0.1, 1.0],
-            [0.1, 0.8, 0.1, 1.0],
-            [0.1, 0.1, 0.8, 1.0],
-            [0.8, 0.8, 0.1, 1.0],
-            [0.8, 0.1, 0.8, 1.0],
-        ][:self.num_blocks]
-        # Target colors should match block colors
-        self.target_colors_rgba = self.block_colors_rgba
+        self.gripper_open_value = 0.3  # Assuming 0 is open based on previous discussion
+        self.gripper_closed_value = 0.695  # Assuming 0.7 is closed (use slightly less, e.g., 0.68?)
+        self.gripper_force = 300.0  # Increased force - TUNE THIS
 
         # --- PyBullet Connection ---
         if self.use_gui:
@@ -103,13 +71,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         p.setPhysicsEngineParameter(fixedTimeStep=self.timestep)
         p.setRealTimeSimulation(0)
 
-        # --- Asset Paths ---
+        # --- Load Scene ---
+        # Asset Paths
         self.assets_path = os.path.join(os.path.dirname(__file__), '..', 'assets')
         self.plane_urdf_path = "plane.urdf" # Use pybullet_data path
         self.table_urdf_path = "table/table.urdf" # Use pybullet_data path
 
         if self.robot_type == 'ur3e':
-            self.robot_urdf_path = os.path.join(self.assets_path, "urdf/robots/ur3e_robotiq/ur3e_robotiq_140.urdf") # Use the generated one
+            self.robot_urdf_path = os.path.join(self.assets_path, "urdf/robots/ur3e_robotiq/ur3e_robotiq_140.urdf")
         elif self.robot_type == 'panda':
              self.robot_urdf_path = os.path.join(self.assets_path, "urdf/robots/panda/panda.urdf") # TODO: Get Panda URDF
         else:
@@ -119,22 +88,53 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.plane_id = p.loadURDF(self.plane_urdf_path, physicsClientId=self.client)
         self.table_start_pos = [0.5, 0, 0]
         self.table_id = p.loadURDF(self.table_urdf_path, basePosition=self.table_start_pos, useFixedBase=True, physicsClientId=self.client)
-        try:
-             aabb = p.getAABB(self.table_id, -1, physicsClientId=self.client)
-             self.table_height = aabb[1][2] # Max Z
-        except Exception as e:
-             print(f"Warning: Could not get table AABB, assuming table height 0.625. Error: {e}")
-             self.table_height = 0.625 # Fallback based on standard table
-
-        # --- Define Placement Locations ---
-        self.target_locations_pos = self._define_locations(self.num_locations, is_target=True)
-        self.dump_location_pos = self._define_locations(self.num_dump_locations, is_target=False)[0] # Assuming one dump location
-        self.spawn_area_bounds = self._define_spawn_area() # Define bounds [min_x, max_x, min_y, max_y]
+        aabb = p.getAABB(self.table_id, -1, physicsClientId=self.client)
+        self.table_height = aabb[1][2] # Max Z
 
         # --- Load Robot ---
         self.robot_start_pos = [0, 0, self.table_height] # Base at table height
         self.robot_start_ori = p.getQuaternionFromEuler([0, 0, 0])
         self.robot_id = p.loadURDF(self.robot_urdf_path, self.robot_start_pos, self.robot_start_ori, useFixedBase=True, physicsClientId=self.client)
+        self._set_gripper(open_gripper=False)
+        time.sleep(5)
+
+        # --- RL Parameters ---
+        # Action Space Definition
+        # N pick actions, M place-target actions, 1 place-dump action
+        self.num_actions = self.num_blocks + self.num_locations + self.num_dump_locations
+        self.action_space = spaces.Discrete(self.num_actions)
+        print(f"Initialized Env: {self.num_blocks} blocks, {self.num_locations} targets, {self.num_dump_locations} dump -> {self.num_actions} actions")
+
+        # Observation Space
+        self.image_size = 56
+        self.observation_space = spaces.Box(low=0, high=255,
+                                            shape=(self.image_size, self.image_size, 3),
+                                            dtype=np.uint8)
+
+        # --- Task Parameters ---
+        self.table_height = 0.0 # Will be determined after loading table
+        self.block_scale = 0.05
+        self.block_half_height = self.block_scale / 2.0
+        self.grasp_approach_dist = 0.03 # Height above table for grasp attempt
+        self.release_dist = 0.03 # Height above table/target for release
+        self.safe_raise_height_abs = 0.1 # Absolute Z height relative to table for "Raise" primitive
+
+        # --- Colors ---
+        # Example: Red, Green, Blue, Yellow, Magenta
+        self.block_colors_rgba = [
+            [0.8, 0.1, 0.1, 1.0],
+            [0.1, 0.8, 0.1, 1.0],
+            [0.1, 0.1, 0.8, 1.0],
+            [0.8, 0.8, 0.1, 1.0],
+            [0.8, 0.1, 0.8, 1.0],
+        ][:self.num_blocks]
+        # Target colors should match block colors
+        self.target_colors_rgba = self.block_colors_rgba
+
+        # --- Define Placement Locations ---
+        self.target_locations_pos = self._define_locations(self.num_locations, is_target=True)
+        self.dump_location_pos = self._define_locations(self.num_dump_locations, is_target=False)[0] # Assuming one dump location
+        self.spawn_area_bounds = self._define_spawn_area() # Define bounds [min_x, max_x, min_y, max_y]
 
         # --- Get Robot Info ---
         self.ee_link_index = self._find_link_index("tool0") # Verify name!
