@@ -53,22 +53,25 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self.tcp_offset_pos, self.tcp_offset_orn)
 
         # Gripper joint values (NEEDS VERIFICATION based on URDF limits and testing)
-        self.gripper_open_value = 0.3  # Assuming 0 is open based on previous discussion
+        self.gripper_open_value = 0.2  # Assuming 0 is open based on previous discussion
         self.gripper_closed_value = 0.695  # Assuming 0.7 is closed (use slightly less, e.g., 0.68?)
-        self.gripper_force = 300.0  # Increased force - TUNE THIS
+        self.gripper_force = 5.0  # Increased force - TUNE THIS
 
         # --- PyBullet Connection ---
         if self.use_gui:
             self.client = p.connect(p.GUI)
             p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
-            p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
+            # p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
+            # p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 0)  # <-- Turn OFF normal visual rendering
+            # p.configureDebugVisualizer(p.COV_ENABLE_WIREFRAME, 1)  # <-- Turn ON wireframe (helps see overlaps)
             # Set initial camera view (TUNE THIS)
             p.resetDebugVisualizerCamera(cameraDistance=1.2, cameraYaw=90, cameraPitch=-40, cameraTargetPosition=[0.5, 0.0, 0.65])
         else:
             self.client = p.connect(p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(self.gravity[0], self.gravity[1], self.gravity[2])
-        p.setPhysicsEngineParameter(fixedTimeStep=self.timestep)
+        p.setPhysicsEngineParameter(fixedTimeStep=self.timestep, numSolverIterations=1000)
+        p.setPhysicsEngineParameter(physicsClientId=self.client)
         p.setRealTimeSimulation(0)
 
         # --- Load Scene ---
@@ -95,8 +98,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.robot_start_pos = [0, 0, self.table_height] # Base at table height
         self.robot_start_ori = p.getQuaternionFromEuler([0, 0, 0])
         self.robot_id = p.loadURDF(self.robot_urdf_path, self.robot_start_pos, self.robot_start_ori, useFixedBase=True, physicsClientId=self.client)
-        self._set_gripper(open_gripper=False)
-        time.sleep(5)
 
         # --- RL Parameters ---
         # Action Space Definition
@@ -112,8 +113,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                             dtype=np.uint8)
 
         # --- Task Parameters ---
-        self.table_height = 0.0 # Will be determined after loading table
-        self.block_scale = 0.05
+        self.block_scale = 0.07
         self.block_half_height = self.block_scale / 2.0
         self.grasp_approach_dist = 0.03 # Height above table for grasp attempt
         self.release_dist = 0.03 # Height above table/target for release
@@ -220,21 +220,17 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     def _find_joint_indices(self, joint_names):
         """ Utility to find multiple joint indices by name. """
         indices = []
-        found_flags = {name: False for name in joint_names}
         num_joints = p.getNumJoints(self.robot_id, physicsClientId=self.client)
-        for i in range(num_joints):
-            info = p.getJointInfo(self.robot_id, i, physicsClientId=self.client)
-            joint_name = info[1].decode('UTF-8')
-            if joint_name in joint_names and not found_flags[joint_name]:
-                indices.append(i)
-                found_flags[joint_name] = True
-            # Break early if all found
-            if all(found_flags.values()):
-                break
-        # Verify all were found
-        for name in joint_names:
-             if not found_flags[name]:
-                 raise ValueError(f"Gripper joint '{name}' not found in URDF.")
+        for name_to_find in joint_names:
+            found = False
+            for i in range(num_joints):
+                info = p.getJointInfo(self.robot_id, i, physicsClientId=self.client)
+                if info[1].decode('UTF-8') == name_to_find:
+                    indices.append(i)
+                    found = True
+                    break
+            if not found:
+                 raise ValueError(f"Gripper joint '{name_to_find}' not found.")
         return indices
 
     def _extract_joint_limits_and_set_rest_pose(self):
@@ -246,7 +242,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.joint_rest_poses = []
 
         num_joints = p.getNumJoints(self.robot_id, physicsClientId=self.client)
-        print(f"DEBUG: Total joints found: {num_joints}. Extracting limits for arm...")
 
         joint_index_counter = 0
         for i in range(num_joints):
@@ -812,29 +807,21 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             "right_inner_finger_joint"
         ]
         mimic_indices = self._find_joint_indices(mimic_names)
-        mimic_multipliers = [-1, -1, -1, 1, -1]
+        mimic_multipliers = [-1, -1, -1, 1, 1]
 
         all_joint_indices = [main_joint_idx] + mimic_indices
         target_positions = [target_val_main] + [m * target_val_main for m in mimic_multipliers]
-        print("Target positions:", target_positions)
 
-        # Get controllable joint indices (non-fixed)
-        num_joints = p.getNumJoints(self.robot_id, physicsClientId=self.client)
-        movable_joint_indices = [i for i in range(num_joints) if
-                                 p.getJointInfo(self.robot_id, i, physicsClientId=self.client)[2] != p.JOINT_FIXED]
-        print("Movable Joints:", movable_joint_indices)
-        print("Joint states before moving: ", p.getJointStates(self.robot_id, all_joint_indices))
         try:
             p.setJointMotorControlArray(
                 bodyUniqueId=self.robot_id,
                 jointIndices=all_joint_indices,
                 controlMode=p.POSITION_CONTROL,
                 targetPositions=target_positions,
-                forces=[self.gripper_force] * len(all_joint_indices)  # Adjust force as needed
+                forces=[200.0] * len(all_joint_indices)  # Adjust force as needed
                 , physicsClientId=self.client
             )
             self._wait_steps(50)
-            print("Joint states: ", p.getJointStates(self.robot_id, all_joint_indices))
             return True
         except Exception as e:
             print(f"Error setting gripper joints: {e}")

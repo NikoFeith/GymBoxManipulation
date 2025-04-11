@@ -806,6 +806,7 @@
     <child link="left_outer_knuckle"/>
     <axis xyz="-1 0 0"/>
     <limit effort="1000" lower="0" upper="0.7" velocity="2.0"/>
+    <dynamics damping="0.1" friction="0.5"/>
   </joint>
   <joint name="left_outer_finger_joint" type="fixed">
     <origin rpy="0 0 0" xyz="0 0.01821998610742 0.0260018192872234"/>
@@ -819,6 +820,7 @@
     <child link="left_inner_knuckle"/>
     <axis xyz="1 0 0"/>
     <limit effort="1000" lower="-0.8757" upper="0.8757" velocity="2.0"/>
+    <dynamics damping="0.1" friction="0.5"/>
     <mimic joint="finger_joint" multiplier="-1" offset="0"/>
   </joint>
   <joint name="left_inner_finger_joint" type="revolute">
@@ -827,6 +829,7 @@
     <child link="left_inner_finger"/>
     <axis xyz="1 0 0"/>
     <limit effort="1000" lower="-0.8757" upper="0.8757" velocity="2.0"/>
+    <dynamics damping="0.1" friction="0.5"/>
     <mimic joint="finger_joint" multiplier="1" offset="0"/>
   </joint>
   <joint name="left_inner_finger_pad_joint" type="fixed">
@@ -841,6 +844,7 @@
     <child link="right_outer_knuckle"/>
     <axis xyz="1 0 0"/>
     <limit effort="1000" lower="-0.8757" upper="0.8757" velocity="2.0"/>
+    <dynamics damping="0.1" friction="0.5"/>
     <mimic joint="finger_joint" multiplier="-1" offset="0"/>
   </joint>
   <joint name="right_outer_finger_joint" type="fixed">
@@ -855,6 +859,7 @@
     <child link="right_inner_knuckle"/>
     <axis xyz="1 0 0"/>
     <limit effort="1000" lower="-0.8757" upper="0.8757" velocity="2.0"/>
+    <dynamics damping="0.1" friction="0.5"/>
     <mimic joint="finger_joint" multiplier="-1" offset="0"/>
   </joint>
   <joint name="right_inner_finger_joint" type="revolute">
@@ -863,6 +868,7 @@
     <child link="right_inner_finger"/>
     <axis xyz="1 0 0"/>
     <limit effort="1000" lower="-0.8757" upper="0.8757" velocity="2.0"/>
+    <dynamics damping="0.1" friction="0.5"/>
     <mimic joint="finger_joint" multiplier="1" offset="0"/>
   </joint>
   <joint name="right_inner_finger_pad_joint" type="fixed">
