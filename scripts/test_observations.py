@@ -16,7 +16,7 @@ if __name__ == "__main__":
     env = gym.make("PhysicsBlockRearrangement-v0",
                    use_gui=False,
                    render_mode='rgb_array', # Use rgb_array if you might call render()
-                   num_blocks=4,           # Example: match your test setup
+                   num_blocks=5,           # Example: match your test setup
                    num_dump_locations=1,
                    robot_type='panda'      # Or 'ur3e' if you switched back
                   )
@@ -50,7 +50,7 @@ if __name__ == "__main__":
         print("\nPlotting observation after random steps...")
         plt.figure(2)
         plt.imshow(obs)
-        plt.title(f"Observation After {step+1} Random Steps") # Use last step count
+        plt.title(f"Observation After Random Steps") # Use last step count
         plt.xlabel("Width (pixels)")
         plt.ylabel("Height (pixels)")
         plt.show() # Show plot and block until closed

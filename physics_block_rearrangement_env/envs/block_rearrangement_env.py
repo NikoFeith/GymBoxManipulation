@@ -8,6 +8,7 @@ import numpy as np
 import random
 import os
 import time # Keep for sleeps
+import math
 
 class PhysicsBlockRearrangementEnv(gym.Env):
     """
@@ -136,16 +137,46 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.grasp_offset_in_hand_frame = [0.0, 0.0, 0.065]
 
         # --- Colors ---
-        self.block_colors_rgba = [
-            [0.8, 0.1, 0.1, 1.0],[0.1, 0.8, 0.1, 1.0],[0.1, 0.1, 0.8, 1.0],
-            [0.8, 0.8, 0.1, 1.0],[0.8, 0.1, 0.8, 1.0],
-        ][:self.num_blocks]
-        self.target_colors_rgba = self.block_colors_rgba
+        # Bright block colors
+        all_block_colors = [
+            [0.9, 0.1, 0.1, 1.0],  # 0: Red
+            [0.1, 0.8, 0.1, 1.0],  # 1: Green
+            [0.1, 0.1, 0.9, 1.0],  # 2: Blue
+            [0.9, 0.9, 0.1, 1.0],  # 3: Yellow
+            [0.9, 0.1, 0.9, 1.0],  # 4: Magenta
+        ]
+        # Corresponding lighter target colors
+        all_target_colors = [
+            [0.9, 0.5, 0.5, 1.0],  # Light Red
+            [0.5, 0.9, 0.5, 1.0],  # Light Green
+            [0.5, 0.5, 0.9, 1.0],  # Light Blue
+            [0.9, 0.9, 0.5, 1.0],  # Light Yellow
+            [0.9, 0.5, 0.9, 1.0],  # Light Magenta
+        ]
+
+        # Slice the lists based on the actual num_blocks requested for this instance
+        if self.num_blocks <= len(all_block_colors):
+            self.block_colors_rgba = all_block_colors[:self.num_blocks]
+            self.target_colors_rgba = all_target_colors[:self.num_blocks]
+        else:
+            # If more blocks than colors, repeat colors (or raise error)
+            print(
+                f"Warning: num_blocks ({self.num_blocks}) > defined colors ({len(all_block_colors)}). Colors will repeat.")
+            self.block_colors_rgba = (all_block_colors * (self.num_blocks // len(all_block_colors) + 1))[
+                                     :self.num_blocks]
+            self.target_colors_rgba = (all_target_colors * (self.num_blocks // len(all_target_colors) + 1))[
+                                      :self.num_blocks]
 
         # --- Define Placement Locations ---
-        self.target_locations_pos = self._define_locations(self.num_locations, is_target=True)
-        self.dump_location_pos = self._define_locations(self.num_dump_locations, is_target=False)[0]
+        # Define available patterns for targets
+        self.target_pattern_options = ['line_y', 'circle', 'random_scatter']  # Add more patterns later?
+        # Define fixed dump location(s) (only define structure here)
+        self._dump_location_base_pos = [self.table_start_pos[0] - 0.15, 0.0]  # X, Y base for dump
+        # Target locations will be defined dynamically in reset
+        self.target_locations_pos = []
+        self.dump_location_pos = []  # Will be set in reset based on _dump_location_base_pos
         self.spawn_area_bounds = self._define_spawn_area()
+
 
         # --- Internal State Variables ---
         self.block_ids = []
@@ -215,83 +246,178 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         print("Robot Initialized.")
 
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
+        """
+        Resets the environment to a new initial state.
+
+        - Removes old objects.
+        - Resets robot to home pose with gripper open.
+        - Randomly selects a target layout pattern.
+        - Defines target locations based on the pattern.
+        - Places target visuals (plates).
+        - Randomly places blocks in the spawn area, avoiding targets/dump.
+        - Lets the simulation settle.
+        - Returns the initial observation and info dict.
+        """
+        super().reset(seed=seed)  # Handles seeding via Gymnasium wrapper
         self.current_steps = 0
         self.held_object_id = None
         self.held_object_idx = None
+
+        # --- Cleanup from previous episode ---
+        # Remove constraint first if it exists
         if self.grasp_constraint_id is not None:
             try:
                 p.removeConstraint(self.grasp_constraint_id, physicsClientId=self.client)
                 # print(f"Reset: Removed constraint {self.grasp_constraint_id}") # Optional debug
             except Exception as e:
                 # print(f"Warning: Tried to remove constraint {self.grasp_constraint_id} but failed: {e}")
-                pass  # Ignore if removal fails
+                pass  # Ignore if removal fails (might already be gone)
             self.grasp_constraint_id = None  # Ensure it's None after attempt
 
-        # --- Remove old objects ---
+        # Remove old blocks
         for block_id in self.block_ids:
-            try: p.removeBody(block_id, physicsClientId=self.client)
-            except Exception: pass
+            try:
+                p.removeBody(block_id, physicsClientId=self.client)
+            except Exception:
+                pass
+        # Remove old target visuals
         for target_id in self.target_ids:
-            try: p.removeBody(target_id, physicsClientId=self.client)
-            except Exception: pass
+            try:
+                p.removeBody(target_id, physicsClientId=self.client)
+            except Exception:
+                pass
         self.block_ids = []
         self.target_ids = []
+        # ------------------------------------
 
-        # --- Reset Robot Pose to Home (uses motors now) ---
+        # --- Reset Robot Pose to Home ---
         print("Resetting robot to home pose...")
         for i, idx in enumerate(self.arm_joint_indices):
-            # Don't need resetJointState again if motors are already holding
-            # Just ensure the target is the home pose
+            # Set motor target to home pose (should already be there from init, but ensures consistency)
             p.setJointMotorControl2(self.robot_id, idx, p.POSITION_CONTROL,
                                     targetPosition=self.home_pose_joints[i],
                                     force=self.arm_max_forces[i],
                                     positionGain=self.arm_kp[i], velocityGain=self.arm_kd[i],
                                     physicsClientId=self.client)
-        # Ensure gripper is open
-        self._open_gripper(wait=False)
-        self._wait_steps(50) # Short wait after reset commands
+        # Ensure gripper is open using the helper function
+        self._open_gripper(wait=False)  # Command open, don't wait long here
+        self._wait_steps(50)  # Short wait after all reset commands
+        # --------------------------------
 
-        # --- Place Targets ---
-        self.goal_config = {}
+        # --- Define Target and Dump Locations for this Episode ---
+        # Select a random pattern for the targets
+        selected_pattern = self.np_random.choice(self.target_pattern_options)
+        # Define target locations based on pattern
+        self.target_locations_pos = self._define_locations(
+            num_locs=self.num_locations,
+            is_target=True,
+            pattern_type=selected_pattern
+            # Optional: Pass target_area_bounds if needed for 'random_scatter'
+            # target_area_bounds=[...]
+        )
+        # Define the fixed dump location(s)
+        # Assuming self._dump_location_base_pos was set in __init__
+        self.dump_location_pos = self._define_locations(
+            num_locs=self.num_dump_locations,
+            is_target=False
+        )[0]  # Get the first (likely only) dump location position
+
+        print(f"  Generated target pattern: {selected_pattern}")
+        print(f"  Target Locations (base Z): {np.round(self.target_locations_pos, 2)}")
+        print(f"  Dump Location (base Z): {np.round(self.dump_location_pos, 2)}")
+        # ---------------------------------------------------------
+
+        # --- Place Target Visuals (Plates) ---
+        self.goal_config = {}  # Stores { target_loc_idx: required_block_idx }
+        # Generate target indices and shuffle them to randomize which location gets which color/block index
         target_loc_indices = list(range(self.num_locations))
-        random.shuffle(target_loc_indices) # Randomize which location gets which color
-        for i in range(self.num_locations):
-             loc_idx = target_loc_indices[i]
-             target_pos = self.target_locations_pos[loc_idx]
-             target_color_rgba = self.target_colors_rgba[i % len(self.target_colors_rgba)]
-             self.goal_config[loc_idx] = i
-             # Create visual plate for target
-             plate_half_extents = [0.04, 0.04, 0.0005]
-             plate_z_center = self.table_height + plate_half_extents[2]
-             vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=plate_half_extents, rgbaColor=target_color_rgba, physicsClientId=self.client)
-             coll_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=plate_half_extents, physicsClientId=self.client)
-             plate_id = p.createMultiBody(0, coll_id, vis_id, [target_pos[0], target_pos[1], plate_z_center], [0,0,0,1], physicsClientId=self.client)
-             self.target_ids.append(plate_id)
+        self.np_random.shuffle(target_loc_indices)  # Use seeded random generator
 
-        # --- Place Blocks Randomly ---
+        for i in range(self.num_locations):
+            # Check if enough locations were generated (e.g., random scatter might fail)
+            if i >= len(self.target_locations_pos):
+                print(
+                    f"Warning: Not enough target locations generated ({len(self.target_locations_pos)}) for goal assignment {i}.")
+                break
+
+            loc_idx = target_loc_indices[i]  # Get the shuffled location index
+            target_pos = self.target_locations_pos[loc_idx]  # Get the actual [x,y,z] coords for this location index
+            target_color_idx = i % len(self.target_colors_rgba)  # Color index cycles through available colors
+            target_color_rgba = self.target_colors_rgba[target_color_idx]
+
+            # Assign Goal: The block with index `i` needs to go to the location at index `loc_idx`
+            self.goal_config[loc_idx] = i
+
+            # Create visual plate for the target
+            plate_half_extents = [0.04, 0.04,
+                                  0.0005]  # Make plate slightly smaller than block base? Plate thickness 1mm.
+            # Calculate center Z so plate bottom is slightly above table surface
+            plate_center_z = self.table_height + plate_half_extents[2] + 0.0001  # Tiny clearance above table
+
+            try:
+                vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=plate_half_extents, rgbaColor=target_color_rgba,
+                                             physicsClientId=self.client)
+                coll_id = -1  # No collision for target plate visuals
+                plate_id = p.createMultiBody(
+                    baseMass=0,  # Static object
+                    baseCollisionShapeIndex=coll_id,
+                    baseVisualShapeIndex=vis_id,
+                    basePosition=[target_pos[0], target_pos[1], plate_center_z],  # Use target X/Y, calculated Z
+                    baseOrientation=[0, 0, 0, 1],  # Flat orientation
+                    physicsClientId=self.client
+                )
+                if plate_id < 0:  # Check if body creation failed
+                    print(f"Warning: Failed to create target plate visual {i} at location index {loc_idx}")
+                else:
+                    self.target_ids.append(plate_id)  # Store ID only if successful
+            except Exception as e:
+                print(f"Error creating target plate visual {i}: {e}")
+        # -----------------------------------
+
+        # --- Place Dynamic Blocks Randomly ---
+        # Needs self.target_locations_pos and self.dump_location_pos for collision avoidance
         available_spawn_locations = self._get_valid_spawn_positions(self.num_blocks)
         if len(available_spawn_locations) < self.num_blocks:
-             raise RuntimeError(f"Not enough valid spawn locations ({len(available_spawn_locations)}) for {self.num_blocks} blocks.")
+            # This could happen if spawn area is too small or cluttered
+            raise RuntimeError(
+                f"Not enough valid spawn locations ({len(available_spawn_locations)}) for {self.num_blocks} blocks.")
+
         for i in range(self.num_blocks):
             spawn_pos_xy = available_spawn_locations[i]
+            # Place block base slightly above table surface
             spawn_z = self.table_height + self.block_half_extents[2] + 0.001
             block_start_pos = [spawn_pos_xy[0], spawn_pos_xy[1], spawn_z]
-            block_start_orientation = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2*np.pi)])
-            # Use scaling with cube.urdf (ensure cube.urdf is unit size)
-            block_id = p.loadURDF("cube.urdf", block_start_pos, block_start_orientation,
-                                  globalScaling=self.block_scale, # Apply scaling here
-                                  physicsClientId=self.client)
-            block_color_rgba = self.block_colors_rgba[i]
-            p.changeVisualShape(block_id, -1, rgbaColor=block_color_rgba, physicsClientId=self.client)
-            p.changeDynamics(block_id, -1, mass=0.1, lateralFriction=0.6, physicsClientId=self.client)
-            self.block_ids.append(block_id)
+            # Random initial Z rotation
+            block_start_orientation = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
 
-        # --- Settle ---
-        self._wait_steps(150) # Let objects settle longer maybe
+            try:
+                # Use scaling with cube.urdf (ensure cube.urdf is unit size)
+                block_id = p.loadURDF("cube.urdf", block_start_pos, block_start_orientation,
+                                      globalScaling=self.block_scale,  # Apply scaling here
+                                      physicsClientId=self.client)
 
+                if block_id < 0: raise Exception("p.loadURDF failed for block")
+
+                block_color_rgba = self.block_colors_rgba[i]
+                p.changeVisualShape(block_id, -1, rgbaColor=block_color_rgba, physicsClientId=self.client)
+                # Set dynamics: mass, friction
+                p.changeDynamics(block_id, -1, mass=0.1, lateralFriction=0.6, physicsClientId=self.client)
+                self.block_ids.append(block_id)
+            except Exception as e:
+                print(f"Error loading block {i}: {e}")
+                # Decide how to handle: raise error, skip block?
+                raise e  # Raise error for now
+        # ------------------------------------
+
+        # --- Settle Simulation ---
+        print("Waiting for objects to settle...")
+        self._wait_steps(150)  # Let objects settle
+        # -------------------------
+
+        # --- Get Initial Observation and Info ---
         observation = self._get_obs()
         info = self._get_info()
+        print("Reset finished.")
         return observation, info
 
     # ==================================================================
@@ -674,29 +800,84 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # Make sure _get_obs doesn't error.
     # Make sure _check_goal uses self.client
 
-    def _define_locations(self, num_locs, is_target):
+    def _define_locations(self, num_locs, is_target, pattern_type='line_y', target_area_bounds=None):
+        """
+        Defines locations on the table.
+        If is_target=True, generates positions based on pattern_type.
+        If is_target=False, generates dump location(s).
+        """
         locations = []
-        center_x = self.table_start_pos[0] + 0.0 # Place relative to table center X
-        spacing = 0.15 # Increase spacing slightly
-        z_pos = self.table_height # Target base Z is table height
+        center_x = self.table_start_pos[0] + 0.0 # Center relative to table X
+        center_y = 0.0
+        z_pos = self.table_height # Base Z for targets/dump is table height
 
         if is_target:
-            # Arrange in a line along Y axis
-            y_start = -spacing * (num_locs -1) / 2.0
-            for i in range(num_locs):
-                locations.append([center_x + 0.15, y_start + i * spacing, z_pos]) # Offset X slightly forward
-        else: # Dump location
-             locations.append([center_x - 0.15, 0.0, z_pos]) # Offset X back
+            print(f"  Defining {num_locs} target locations with pattern: {pattern_type}")
+            min_target_dist_sq = (self.block_scale * 2.0)**2 # Min distance between target centers
 
-        # Add visualization for locations
-        if self.use_gui:
-            for i, loc in enumerate(locations):
-                 text = f"T{i}" if is_target else "D0"
-                 # text_pos = [loc[0], loc[1], loc[2]+0.05] # Text above
-                 # p.addUserDebugText(text, text_pos, textColorRGB=[0.5, 0.5, 0.5], textSize=1.0, physicsClientId=self.client)
-                 # Or draw lines
-                 # p.addUserDebugLine([loc[0]-0.04, loc[1]-0.04, loc[2]], [loc[0]+0.04, loc[1]+0.04, loc[2]], [0.5,0.5,0.5], physicsClientId=self.client)
-                 pass # Keep visualization minimal or use plates in reset
+            if pattern_type == 'line_y':
+                target_spacing = 0.15
+                line_x = center_x + 0.20 # Place line forward from center
+                y_start = center_y - target_spacing * (num_locs - 1) / 2.0 # Center the line around Y=0
+                for i in range(num_locs):
+                    locations.append([line_x, y_start + i * target_spacing, z_pos])
+
+            elif pattern_type == 'circle':
+                radius = 0.18 # Radius of the circle
+                # Slightly offset circle center forward to avoid robot base
+                circle_center_x = center_x + 0.15
+                circle_center_y = center_y
+                # Start angle slightly offset so positions aren't exactly on axes if possible
+                angle_offset = self.np_random.uniform(0, math.pi / num_locs) if num_locs > 0 else 0
+                for i in range(num_locs):
+                    angle = angle_offset + 2 * math.pi * i / num_locs
+                    x = circle_center_x + radius * math.cos(angle)
+                    y = circle_center_y + radius * math.sin(angle)
+                    # Basic check to keep within reasonable table bounds (optional)
+                    if abs(x - self.table_start_pos[0]) > 0.4 or abs(y) > 0.4:
+                         print(f"Warning: Circle target {i} potentially off table, adjusting.")
+                         # Simple fallback: place near center (or implement retry)
+                         x = circle_center_x + 0.1 * math.cos(angle)
+                         y = circle_center_y + 0.1 * math.sin(angle)
+                    locations.append([x, y, z_pos])
+
+            elif pattern_type == 'random_scatter':
+                 if target_area_bounds is None:
+                      # Define default target area bounds: right side of the table
+                      target_area_bounds = [center_x + 0.05, center_x + 0.25, -0.2, 0.2] # [minX, maxX, minY, maxY]
+                 print(f"    Scattering targets within: {np.round(target_area_bounds, 2)}")
+                 attempts = 0
+                 max_attempts = num_locs * 50 # Limit attempts
+                 while len(locations) < num_locs and attempts < max_attempts:
+                    attempts += 1
+                    x = self.np_random.uniform(target_area_bounds[0], target_area_bounds[1])
+                    y = self.np_random.uniform(target_area_bounds[2], target_area_bounds[3])
+                    # Check distance to other targets chosen *this episode*
+                    too_close = False
+                    for loc in locations:
+                         dist_sq = (loc[0]-x)**2 + (loc[1]-y)**2
+                         if dist_sq < min_target_dist_sq:
+                              too_close = True
+                              break
+                    if not too_close:
+                         locations.append([x, y, z_pos]) # Store base Z only
+                 if len(locations) < num_locs: print(f"Warning: Only placed {len(locations)}/{num_locs} random targets.")
+
+            else:
+                print(f"Warning: Unknown target pattern type '{pattern_type}'. Using default line_y.")
+                # Fallback to line_y (copy logic from above)
+                target_spacing = 0.15
+                line_x = center_x + 0.20
+                y_start = center_y - target_spacing * (num_locs - 1) / 2.0
+                for i in range(num_locs):
+                    locations.append([line_x, y_start + i * target_spacing, z_pos])
+
+        else: # Define Dump location(s) - Keep fixed relative to table center for simplicity
+             dump_x = self._dump_location_base_pos[0]
+             dump_y = self._dump_location_base_pos[1]
+             for i in range(num_locs): # Allows multiple dump locs if needed later
+                 # Simple fixed position for the first dump location, stagger others
+                 locations.append([dump_x, dump_y + i*0.1, z_pos])
 
         return locations
 
