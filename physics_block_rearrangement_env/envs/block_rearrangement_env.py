@@ -160,7 +160,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.camera_target_pos = [self.table_start_pos[0], self.table_start_pos[1], self.table_height + 0.1]
         self.camera_distance = 1.0
         self.camera_yaw = 90
-        self.camera_pitch = -45
+        self.camera_pitch = -30
         print("Environment Initialized.")
 
     # ==================================================================
