@@ -1,3 +1,6 @@
+logging:
+  level: "ERROR"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+
 # Physics settings
 physics:
   gravity: [0, 0, -9.81]

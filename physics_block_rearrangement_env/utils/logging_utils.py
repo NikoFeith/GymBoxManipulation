@@ -13,7 +13,7 @@ LOG_LEVELS = {
 }
 
 DEFAULT_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-DEFAULT_LEVEL = logging.INFO # Default level if not specified
+DEFAULT_LEVEL = logging.INFO
 
 def setup_logger(name: str, level: int = DEFAULT_LEVEL, log_file: str = None, log_format: str = DEFAULT_FORMAT):
     """
