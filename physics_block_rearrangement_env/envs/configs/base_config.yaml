@@ -50,8 +50,8 @@ robot:
 # Default Camera settings
 camera:
   image_size: 56
-  target_pos: [0.1, 0.0, 0.1]
-  distance: 1.0
+  target_pos: [0.5, 0.0, 0.5]
+  distance: 0.95
   yaw: 90
   pitch: -90
 

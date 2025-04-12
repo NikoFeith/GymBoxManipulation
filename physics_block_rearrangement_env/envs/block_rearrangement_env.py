@@ -1,4 +1,5 @@
 import logging
+import time
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -550,6 +551,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # -------------------------
 
         # --- 5. Get Initial Observation and Info ---
+
         observation = self._get_obs()
         # Get base info, then merge task-specific info if provided
         info = self._get_info()
@@ -1086,38 +1088,78 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             logger.warning(f"Warning: Only found {len(valid_positions)}/{num_required} valid spawn locations.")
         return valid_positions
 
+    # Inside PhysicsBlockRearrangementEnv class
+
+    # Inside PhysicsBlockRearrangementEnv class
+
     def _get_obs(self):
-        view_matrix = p.computeViewMatrixFromYawPitchRoll(self.camera_target_pos, self.camera_distance, self.camera_yaw, self.camera_pitch, 0, 2, self.client)
-        proj_matrix = p.computeProjectionMatrixFOV(60, float(self.image_size)/self.image_size, 0.1, 2.0, self.client)
+        """
+        Gets the observation image. Temporarily moves the robot to a photo pose
+        using save/restore state to avoid occlusion.
+        """
+        state_id = -1  # Initialize state_id
         try:
-            (_, _, px, _, _) = p.getCameraImage(self.image_size, self.image_size, view_matrix, proj_matrix, renderer=p.ER_BULLET_HARDWARE_OPENGL, physicsClientId=self.client)
+            # --- 1. Save the current simulation state ---
+            state_id = p.saveState(physicsClientId=self.client)
+            # logger.debug("Saved simulation state for observation.") # Optional log
+
+            # --- 2. Temporarily move robot joints to photo pose ---
+            photo_pose = self.home_pose_joints
+            if hasattr(self, 'arm_joint_indices') and len(self.arm_joint_indices) == len(photo_pose):
+                for i, joint_index in enumerate(self.arm_joint_indices):
+                    p.resetJointState(
+                        bodyUniqueId=self.robot_id, jointIndex=joint_index,
+                        targetValue=photo_pose[i], targetVelocity=0.0,
+                        physicsClientId=self.client
+                    )
+                if hasattr(self, 'finger_indices') and self.finger_indices:
+                    p.resetJointState(self.robot_id, self.finger_indices[0], self.gripper_open_value, 0.0, self.client)
+                    p.resetJointState(self.robot_id, self.finger_indices[1], self.gripper_open_value, 0.0, self.client)
+            else:
+                logger.warning("Could not set photo pose: Arm joint indices or photo pose mismatch.")
+
+            # --- 3. Get the camera image ---
+            view_matrix = p.computeViewMatrixFromYawPitchRoll(
+                cameraTargetPosition=self.camera_target_pos, distance=self.camera_distance,
+                yaw=self.camera_yaw, pitch=self.camera_pitch, roll=0,
+                upAxisIndex=2, physicsClientId=self.client
+            )
+            proj_matrix = p.computeProjectionMatrixFOV(
+                fov=60, aspect=float(self.image_size) / self.image_size,
+                nearVal=0.1, farVal=2.0, physicsClientId=self.client
+            )
+
+            # === CHANGE RENDERER HERE ===
+            (_, _, px, _, _) = p.getCameraImage(
+                width=self.image_size, height=self.image_size,
+                viewMatrix=view_matrix, projectionMatrix=proj_matrix,
+                # Use TinyRenderer instead of OpenGL when GUI might be active
+                renderer=p.ER_TINY_RENDERER,
+                physicsClientId=self.client
+            )
+            # ============================
+
             rgb_array = np.array(px, dtype=np.uint8)[:, :, :3]
             return rgb_array
+
         except Exception as e:
-             logger.exception(f"Error getting camera image: {e}. Returning blank image.")
-             return np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
+            logger.exception(f"Error getting camera image: {e}. Returning blank image.")
+            return np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
+
+        finally:
+            # --- 4. ALWAYS Restore the original simulation state ---
+            if state_id >= 0:  # Check if state was successfully saved
+                try:
+                    p.restoreState(stateId=state_id, physicsClientId=self.client)
+                    p.removeState(state_id)  # Clean up the saved state
+                except Exception as e:
+                    logger.error(
+                        f"CRITICAL ERROR: Failed to restore simulation state! State ID: {state_id}. Error: {e}",
+                        exc_info=True)                    # Environment might be in a corrupted state now.
 
     def _get_info(self):
         info = {'held_object_idx': self.held_object_idx,'current_steps': self.current_steps}
         return info
-
-    def _check_goal(self):
-        if self.held_object_id is not None: return False
-        on_target_count = 0
-        goal_dist_threshold = 0.04
-        for target_loc_idx, required_block_idx in self.goal_config.items():
-            if required_block_idx < len(self.block_ids):
-                block_id = self.block_ids[required_block_idx]
-                target_pos = self.target_locations_pos[target_loc_idx]
-                try:
-                    current_pos, _ = p.getBasePositionAndOrientation(block_id, physicsClientId=self.client)
-                    dist_xy = np.linalg.norm(np.array(current_pos[:2]) - np.array(target_pos[:2]))
-                    on_surface = abs(current_pos[2] - (self.table_height + self.block_half_extents[2])) < 0.02
-                    if dist_xy < goal_dist_threshold and on_surface:
-                        on_target_count += 1
-                except Exception:
-                    return False
-        return on_target_count == len(self.goal_config)
 
     def render(self, mode='human'):
         if mode == 'rgb_array': return self._get_obs()
