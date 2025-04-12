@@ -1,0 +1,75 @@
+# Physics settings
+physics:
+  gravity: [0, 0, -9.81]
+  timestep: 0.00416666666 # 1/240
+  num_solver_iterations: 150
+
+# Default Simulation control (can be overridden by task)
+simulation:
+  primitive_max_steps: 400
+  gripper_wait_steps: 120
+  max_episode_steps: 100
+  pose_reached_threshold: 0.02
+  orientation_reached_threshold: 0.1
+  z_hover_offset: 0.15
+  grasp_clearance_above_top: 0.08
+  place_clearance_above_top: 0.09
+
+# Default Rewards (can be overridden by task)
+rewards:
+  step_penalty: -0.01
+  goal_reward: 1.0
+  ik_fail_penalty: -0.1
+  move_fail_penalty: -0.05
+
+# Robot hardware and default control parameters
+robot:
+  type: 'panda'
+  urdf_path: "franka_panda/panda.urdf"
+  panda: # Panda specific section
+    arm_joint_names: ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7"]
+    finger_joint_names: ["panda_finger_joint1", "panda_finger_joint2"]
+    preferred_ee_link_name: "panda_hand"
+    fallback_ee_link_name_1: "panda_link7"
+    fallback_ee_link_name_2: "panda_link8"
+    arm_max_forces: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
+    arm_kp: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+    arm_kd: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    gripper_open_value: 0.04
+    gripper_closed_value: 0.025 # Default closed (physically reachable)
+    gripper_max_force: 40
+    gripper_kp: 0.2
+    gripper_kd: 1.0
+    ik_solver: "IK_DLS" # Use string for PyBullet constant name
+    home_pose_joints: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854] # Approx pi/4 etc.
+    grasp_offset_in_hand_frame: [0.0, 0.0, 0.065] # Default grasp offset
+
+# Default Camera settings
+camera:
+  image_size: 56
+  target_pos: [0.1, 0.0, 0.1]
+  distance: 1.0
+  yaw: 90
+  pitch: -90
+
+# Default Scene assets
+assets:
+  plane: "plane.urdf"
+  table: "table/table.urdf"
+  object: "cube_small.urdf" # Default object
+  table_start_pos: [0.5, 0, 0]
+
+# Colors (can be overridden by task)
+colors:
+  block_rgba:
+    - [0.9, 0.1, 0.1, 1.0] # Red
+    - [0.1, 0.8, 0.1, 1.0] # Green
+    - [0.1, 0.1, 0.9, 1.0] # Blue
+    - [0.9, 0.9, 0.1, 1.0] # Yellow
+    - [0.9, 0.1, 0.9, 1.0] # Magenta
+  target_rgba:
+    - [0.9, 0.5, 0.5, 1.0] # Light Red
+    - [0.5, 0.9, 0.5, 1.0] # Light Green
+    - [0.5, 0.5, 0.9, 1.0] # Light Blue
+    - [0.9, 0.9, 0.5, 1.0] # Light Yellow
+    - [0.9, 0.5, 0.9, 1.0] # Light Magenta
