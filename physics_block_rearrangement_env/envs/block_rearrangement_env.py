@@ -25,7 +25,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.use_gui = use_gui or (render_mode == 'human')
 
         # --- Internal State Variables ---
-        self._initialize_internal_state()
+        self.assets_path = os.path.join(os.path.dirname(__file__), '..', 'assets')  # For local assets if needed
+        self.block_ids = []
+        self.target_ids = []
+        self.goal_config = {}
+        self.current_steps = 0
+        self.held_object_id = None
+        self.held_object_idx = None
+        self.grasp_constraint_id = None
 
         # --- Load Configuration ---
         self._load_and_merge_configs(base_config_file, task_config_file)
@@ -357,18 +364,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         print(f"  Observation Space: Box(shape=({self.image_size}, {self.image_size}, 3))")
 
         print("RL interface setup complete.")
-
-    def _initialize_internal_state(self):
-        """Initializes internal state variables."""
-        self.assets_path = os.path.join(os.path.dirname(__file__), '..', 'assets')  # For local assets if needed
-        self.block_ids = []
-        self.target_ids = []
-        self.goal_config = {}
-        self.current_steps = 0
-        self.held_object_id = None
-        self.held_object_idx = None
-        self.grasp_constraint_id = None
-        print("Internal state initialized.")
 
     # ==================================================================
     # --- Reset ---
