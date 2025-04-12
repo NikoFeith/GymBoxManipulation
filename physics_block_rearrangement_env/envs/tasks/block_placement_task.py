@@ -19,7 +19,6 @@ class BlockPlacementTask(BaseTask):
     def _load_task_params(self):
         """Load parameters for the placement task."""
         self.num_blocks = self.config.get("num_blocks", 2)
-        self.target_pattern = self.config.get("target_pattern", "line_y")
         self.target_spacing = self.config.get("target_spacing", 0.15)
         self.line_x_offset = self.config.get("line_x_offset", 0.20)
         self.circle_radius = self.config.get("circle_radius", 0.18)
@@ -31,8 +30,6 @@ class BlockPlacementTask(BaseTask):
 
         self.num_locations = self.num_blocks
         self.num_dump_locations = self.config.get("num_dump_locations", 1)
-
-        logger.info(f"  BlockPlacementTask: Loaded params - num_blocks={self.num_blocks}, pattern='{self.target_pattern}'")
 
     def define_spawn_area(self) -> list[float]:
         """Defines the block spawn area based on task config."""
@@ -51,80 +48,49 @@ class BlockPlacementTask(BaseTask):
         return spawn_bounds
 
     def reset_task_scenario(self):
-        """Set up the placement task scenario based on the chosen pattern."""
-        env = self.env # Shortcut
+        """
+        Sets up the task scenario:
+        - Defines target and dump locations.
+        - Spawns target visuals.
+        - Spawns blocks.
+        - Defines the goal configuration.
+        Returns a task_info dict (can be empty).
+        """
+        env = self.env  # shorthand
 
-        # 1. Define Target Locations (using self.target_pattern)
-        target_locs = []
-        center_x = env.table_start_pos[0]
-        center_y = env.table_start_pos[1] # Usually 0
-        z_pos = env.table_height # Base Z is table height
-        min_target_dist_sq = (env.block_scale * 2.0)**2 # Use env's block_scale
+        # --- 1. Define target positions ---
+        layout = env.target_layout  # Must be loaded from config earlier
+        env.target_locations_pos = env._generate_target_positions(layout)
 
-        logger.info(f"  Defining {self.num_locations} target locations with pattern: {self.target_pattern}")
+        # --- 2. Define dump positions ---
+        dump_base = env.config.get("task", {}).get("dump_base_pos", [0.05, 0.0])
+        if len(dump_base) < 2:
+            dump_base = [0.05, 0.0]
 
-        if self.target_pattern == 'line_y':
-            line_x = center_x + self.line_x_offset
-            y_start = center_y - self.target_spacing * (self.num_locations - 1) / 2.0
-            for i in range(self.num_locations):
-                target_locs.append([line_x, y_start + i * self.target_spacing, z_pos])
-        # ... (elif 'circle', elif 'random_scatter', else) ...
-        elif self.target_pattern == 'circle':
-            radius = self.circle_radius
-            circle_center_x = center_x + self.circle_center_offset[0]
-            circle_center_y = center_y + self.circle_center_offset[1]
-            angle_offset = env.np_random.uniform(0, math.pi / self.num_locations) if self.num_locations > 0 else 0
-            for i in range(self.num_locations):
-                angle = angle_offset + 2 * math.pi * i / self.num_locations
-                x = circle_center_x + radius * math.cos(angle)
-                y = circle_center_y + radius * math.sin(angle)
-                target_locs.append([x, y, z_pos])
-        elif self.target_pattern == 'random_scatter':
-             bounds = [ # Calculate absolute bounds
-                 center_x + self.target_scatter_bounds[0], center_x + self.target_scatter_bounds[1],
-                 center_y + self.target_scatter_bounds[2], center_y + self.target_scatter_bounds[3]
-             ]
-             logger.info(f"    Scattering targets within: {np.round(bounds, 2)}")
-             attempts = 0; max_attempts = self.num_locations * 50
-             while len(target_locs) < self.num_locations and attempts < max_attempts:
-                attempts += 1
-                x = env.np_random.uniform(bounds[0], bounds[1])
-                y = env.np_random.uniform(bounds[2], bounds[3])
-                too_close = any(((loc[0]-x)**2 + (loc[1]-y)**2 < min_target_dist_sq) for loc in target_locs)
-                if not too_close: target_locs.append([x, y, z_pos])
-             if len(target_locs) < self.num_locations: print(f"Warning: Only placed {len(target_locs)}/{self.num_locations} random targets.")
-        else: # Fallback or error for unknown pattern
-            logger.warning(f"Warning: Unknown target pattern '{self.target_pattern}'. Using default line_y.")
-            target_spacing = 0.15; line_x = center_x + 0.20
-            y_start = center_y - target_spacing * (self.num_locations - 1) / 2.0
-            for i in range(self.num_locations): target_locs.append([line_x, y_start + i * target_spacing, z_pos])
+        # Compute Z position: flush with table top, add small offset for clearance
+        base = np.array(env.table_start_pos[:2])
+        dump_z = env.table_height + 0.005
 
+        # Create multiple dump positions along vertical axis
+        env.dump_location_pos = [
+            [base[0] + dump_base[0], base[1] + dump_base[1] - i * 0.08, dump_z]
+            for i in range(env.num_dump_locations)
+        ]
 
-        env.target_locations_pos = target_locs # Set target locations in main env
+        print("Dump locations:", env.dump_location_pos)
 
-        # --- Define Dump Location (if needed) ---
-        # Although BlockPlacement doesn't use dump, we should still define the pos
-        # if num_dump_locations > 0, based on env's _dump_location_base_pos
-        env.dump_location_pos = []
-        if self.num_dump_locations > 0:
-             # Use the base position stored in the env, potentially generating multiple
-             dump_base_x = env._dump_location_base_pos[0]
-             dump_base_y = env._dump_location_base_pos[1]
-             for i in range(self.num_dump_locations):
-                 # Simple fixed position for the first dump location, stagger others
-                 env.dump_location_pos.append([dump_base_x, dump_base_y + i*0.1, z_pos])
+        # --- 3. Define goal configuration ---
+        mapping_type = env.config.get("mapping_type", "random")
+        env.goal_config = self._generate_goal_config(mapping_type)
+        logger.debug(f'Goal config updated with: {env.goal_config}')
 
+        # --- 4. Spawn target visuals ---
+        env._place_target_visuals()  # You must implement this if not already there
 
-        # 2. Define Goal Config
-        env.goal_config = {i: i for i in range(self.num_locations)}
+        # --- 5. Spawn blocks ---
+        env._spawn_blocks_random_xy()  # Existing method
 
-        # 3. Trigger Spawning of Blocks and Target Visuals in Env
-        env._load_colors()
-        env._place_target_visuals()
-        env._spawn_blocks(self.num_blocks) # This now uses env.spawn_area_bounds set in env.__init__
-
-        logger.info(f"  Task Scenario Reset: {self.config.get('name', 'BlockPlacementTask')} - {self.num_blocks} blocks, pattern '{self.target_pattern}'.")
-        return {"task_type": "BlockPlacement", "pattern": self.target_pattern}
+        return {"goal_mapping": env.goal_config}
 
     def check_goal(self) -> bool:
         env = self.env
@@ -143,3 +109,26 @@ class BlockPlacementTask(BaseTask):
                     on_target_count += 1
             except Exception: return False
         return on_target_count == len(env.goal_config)
+
+    def _generate_goal_config(self, mapping_type: str = "ordered") -> dict:
+        """
+        Generate a mapping from block indices to target indices.
+
+        Args:
+            mapping_type (str): Either 'ordered' or 'random'.
+                - 'ordered' maps block i → target i.
+                - 'random' shuffles target assignments.
+
+        Returns:
+            dict: goal_config where keys are block indices and values are target indices.
+        """
+        num_blocks = self.env.num_blocks
+        block_indices = list(range(num_blocks))
+
+        if mapping_type == "random":
+            target_indices = block_indices.copy()
+            self.env.np_random.shuffle(target_indices)
+        else:  # fallback to ordered
+            target_indices = block_indices
+
+        return {b: t for b, t in zip(block_indices, target_indices)}

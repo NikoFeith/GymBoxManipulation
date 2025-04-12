@@ -1,50 +1,55 @@
 # scripts/run_and_visualize_obs.py
 
 import gymnasium as gym
-import matplotlib.pyplot as plt
 import numpy as np
 import time
 import traceback
+import cv2 # Import OpenCV
 
-# Import your environment package to register it
-import physics_block_rearrangement_env
+# Import your environment package
+try:
+    import physics_block_rearrangement_env
+except ImportError:
+    print("*"*50)
+    print("ERROR: Could not import 'physics_block_rearrangement_env'.")
+    print("Make sure the package is installed (e.g., 'pip install -e .')")
+    print("or that the project directory is in your PYTHONPATH.")
+    print("*"*50)
+    exit(1)
 
 # --- Test Configuration ---
 ENV_ID = "PhysicsBlockRearrangement-v0"
-# Specify the task config file you want to run
-# TASK_CONFIG_FILE = "some_other_task.yaml"
-TASK_CONFIG_FILE = None # Use default "place_3_line.yaml"
+TASK_CONFIG_FILE = None # Use default task
 
-# Define a sequence of actions to test (indices based on your env's action space)
-# Example for place_3_line (3 blocks, 3 targets, 0 dump):
-# Actions: 0=Pick0, 1=Pick1, 2=Pick2, 3=PlaceTgt0, 4=PlaceTgt1, 5=PlaceTgt2
-ACTION_SEQUENCE = [0, 3, 1, 4, 2, 5] # Pick 0, Place 0, Pick 1, Place 1, etc.
-# Or set ACTION_SEQUENCE = None to use random actions
+ACTION_SEQUENCE = [0, 3, 1, 4, 2, 5] # Example for place_3_line
+# ACTION_SEQUENCE = None # Uncomment to use random actions
 
 NUM_EPISODES = 2
-MAX_STEPS_PER_EPISODE = len(ACTION_SEQUENCE) if ACTION_SEQUENCE else 20 # Limit steps
+MAX_STEPS_PER_EPISODE = len(ACTION_SEQUENCE) if ACTION_SEQUENCE else 20
 
-RENDER_DELAY_SEC = 0.5 # Pause between steps to see GUI and plot
+RENDER_DELAY_SEC = 0.5 # Pause between steps
+
+# --- ADD Display Size ---
+DISPLAY_WIDTH = 336 # Choose a desired size (e.g., 6x the 56x56 obs)
+DISPLAY_HEIGHT = 336
+# -----------------------
+
 
 # --- Main Test Function ---
 def run_visual_test():
     print(f"--- Starting Visual Test with Observations for '{ENV_ID}' ---")
-    if TASK_CONFIG_FILE:
-        print(f"Using Task Config: {TASK_CONFIG_FILE}")
-    if ACTION_SEQUENCE:
-        print(f"Using Action Sequence: {ACTION_SEQUENCE}")
-    else:
-        print(f"Using Random Actions.")
+    # ... (print config info) ...
 
     env = None
-    plt.ion()  # Turn on interactive mode for matplotlib
-    fig, ax = plt.subplots()
-    img_display = None # Placeholder for the imshow object
+    window_name = "Observation (Resized)" # Changed window name slightly
+    # Still use WINDOW_NORMAL to allow manual resizing
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    # Optionally resize the window initially (may depend on OS/window manager)
+    # cv2.resizeWindow(window_name, DISPLAY_WIDTH, DISPLAY_HEIGHT)
 
     try:
-        # --- Create Environment with GUI Enabled ---
-        env_kwargs = {'use_gui': True} # <<< Key change: Enable GUI
-                         # 'render_mode' is less critical now, can be 'human' or 'rgb_array'
+        # Create Environment with GUI
+        env_kwargs = {'use_gui': True}
         if TASK_CONFIG_FILE:
             env_kwargs['task_config_file'] = TASK_CONFIG_FILE
 
@@ -54,18 +59,26 @@ def run_visual_test():
 
         for episode in range(NUM_EPISODES):
             print(f"\n--- Episode {episode + 1}/{NUM_EPISODES} ---")
-            obs, info = env.reset()
+            obs, info = env.reset() # Get initial state
 
-            # --- Initialize Observation Plot ---
+            # --- Display Initial Observation with OpenCV (Resized) ---
             print("Displaying initial observation...")
-            if img_display is None:
-                img_display = ax.imshow(obs)
-                plt.title(f"Observation (Episode {episode + 1}, Step 0)")
+            if isinstance(obs, np.ndarray) and obs.size > 0:
+                obs_bgr = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+                # --- Resize the image ---
+                obs_resized = cv2.resize(
+                    obs_bgr,
+                    (DISPLAY_WIDTH, DISPLAY_HEIGHT),
+                    interpolation=cv2.INTER_NEAREST # Good for pixelated look
+                    # interpolation=cv2.INTER_LINEAR # Alternative for smoother look
+                )
+                # ------------------------
+                cv2.imshow(window_name, obs_resized)
             else:
-                img_display.set_data(obs)
-                plt.title(f"Observation (Episode {episode + 1}, Step 0)")
-            fig.canvas.draw()
-            plt.pause(0.5) # Pause to see initial state
+                print("Warning: Initial observation invalid, showing blank.")
+                blank = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, 3), dtype=np.uint8)
+                cv2.imshow(window_name, blank)
+            cv2.waitKey(500) # Wait 500ms for window to show
 
             terminated = False
             truncated = False
@@ -76,65 +89,58 @@ def run_visual_test():
 
                 # --- Choose Action ---
                 if ACTION_SEQUENCE:
-                    if action_idx >= len(ACTION_SEQUENCE):
-                        print("Action sequence finished.")
-                        break
-                    action = ACTION_SEQUENCE[action_idx]
-                    action_idx += 1
+                    if action_idx >= len(ACTION_SEQUENCE): break
+                    action = ACTION_SEQUENCE[action_idx]; action_idx += 1
                 else:
-                    action = env.action_space.sample() # Random action
+                    action = env.action_space.sample()
 
                 print(f"\nStep {step_count + 1}: Executing Action: {action}")
 
                 # --- Step Environment ---
                 obs, reward, terminated, truncated, info = env.step(action)
-
                 print(f"  -> Reward: {reward:.3f}, Term: {terminated}, Trunc: {truncated}, Info: {info}")
 
-                print(f"  --- Obs Check (Step {step_count + 1}) ---")
-                print(f"      Obs Type: {type(obs)}")
-                print(f"      Is NumPy Array: {isinstance(obs, np.ndarray)}")
-                if isinstance(obs, np.ndarray):
-                    print(f"      Obs Shape: {obs.shape}")
-                    print(f"      Obs Dtype: {obs.dtype}")
-                    if obs.size > 0:
-                        print(f"      Obs Stats: min={np.min(obs)}, max={np.max(obs)}, mean={np.mean(obs):.2f}")
-                    else:
-                        print(f"      Obs data is empty (size 0).")
+                # --- Display Observation with OpenCV (Resized) ---
+                if isinstance(obs, np.ndarray) and obs.size > 0:
+                    obs_bgr = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+                    # --- Resize the image ---
+                    obs_resized = cv2.resize(
+                        obs_bgr,
+                        (DISPLAY_WIDTH, DISPLAY_HEIGHT),
+                        interpolation=cv2.INTER_NEAREST
+                    )
+                    # ------------------------
+                    cv2.imshow(window_name, obs_resized)
                 else:
-                    print(f"      Obs data is not a NumPy array.")
-                print(f"  -------------------------")
+                     print("Warning: Observation invalid, showing blank.")
+                     blank = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, 3), dtype=np.uint8)
+                     cv2.imshow(window_name, blank)
 
-                # --- Update Observation Plot ---
-                # The 'obs' here should be the robot-free image from _get_obs
-                img_display.set_data(obs)
-                plt.title(f"Observation (Episode {episode + 1}, Step {step_count + 1})")
-                fig.canvas.draw_idle() # Efficiently update plot
-                plt.pause(0.01) # Allow plot to refresh
+                key = cv2.waitKey(1)
+                if key == 27: raise KeyboardInterrupt
 
-                # --- Pause to see GUI ---
-                # Add delay *after* step and plot update so user can see the result
+                # --- Pause to see PyBullet GUI ---
                 print(f"  Pausing for {RENDER_DELAY_SEC}s to observe GUI...")
                 time.sleep(RENDER_DELAY_SEC)
 
+            # ... (End of step loop, print episode end reason) ...
+            time.sleep(1.0)
 
-            print(f"Episode {episode + 1} finished.")
-            if terminated: print("  Reason: Terminated (Goal Reached?)")
-            if truncated: print("  Reason: Truncated")
-            time.sleep(1.0) # Pause between episodes
+        # ... (End of episode loop) ...
 
-
+    except KeyboardInterrupt:
+         print("Test interrupted by user.")
     except Exception as e:
         print("\n!!!!!! ERROR during Visual Test !!!!!!")
         print(traceback.format_exc())
 
     finally:
-        plt.ioff() # Turn off interactive mode
-        plt.close(fig) # Close the plot window
         if env is not None:
             print("\nClosing environment.")
             env.close()
             print("Environment closed.")
+        cv2.destroyAllWindows() # Close OpenCV window
+        print("OpenCV windows closed.")
 
 # --- Run the Test ---
 if __name__ == "__main__":
