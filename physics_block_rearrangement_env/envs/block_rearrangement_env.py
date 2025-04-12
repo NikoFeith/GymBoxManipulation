@@ -1,3 +1,5 @@
+import logging
+
 import gymnasium as gym
 from gymnasium import spaces
 import pybullet as p
@@ -9,9 +11,12 @@ import yaml
 import math
 
 from physics_block_rearrangement_env.utils.robot_utils import *
+from physics_block_rearrangement_env.utils.logging_utils import *
 from physics_block_rearrangement_env.envs.task_interface import BaseTask
 from physics_block_rearrangement_env.envs import tasks
 
+log_level = logging.WARNING # Or logging.DEBUG
+logger = setup_logger(__name__, level=log_level)
 
 
 class PhysicsBlockRearrangementEnv(gym.Env):
@@ -46,7 +51,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             # Call the refactored method, passing the necessary imports
             self._load_and_instantiate_task(tasks, BaseTask)
         except ValueError as e:
-            print(f"FATAL: Environment initialization failed during task loading: {e}")
+            logger.critical(f": Environment initialization failed during task loading: {e}")
             raise e
 
 
@@ -70,9 +75,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.dump_location_pos = []  # Will be populated in reset
         self._dump_location_base_pos = self.config.get('task', {}).get('dump_base_pos', [self.table_start_pos[0] - 0.15,
                                                                                          0.0])  # Store base XY for dump
-        self.spawn_area_bounds = self._define_spawn_area()  # Define spawn area
+        self.spawn_area_bounds = self.task.define_spawn_area()  # Define spawn area
 
-        print(f"Environment Initialized.")
+        logger.info(f"Environment Initialized.")
 
     # ==========================================
     # --- Config Helper Methods ---
@@ -92,9 +97,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 try:
                     base_config = yaml.safe_load(f) or {}
                 except yaml.YAMLError as e:
-                    print(f"Error loading base config {base_config_path}: {e}")
+                    logger.error(f"Error loading base config {base_config_path}: {e}")
         else:
-            print(f"Warning: Base config file not found: {base_config_path}")
+            logger.warning(f"Base config file not found: {base_config_path}")
 
         # Load Task Config using the provided filename
         task_config = {}
@@ -103,20 +108,20 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 try:
                     task_config = yaml.safe_load(f) or {}
                 except yaml.YAMLError as e:
-                    print(f"Error loading task config {task_config_path}: {e}")
+                    logger.error(f"Error loading task config {task_config_path}: {e}")
         else:
             # Try looking in the main config dir as a fallback? Optional.
             task_config_path_alt = config_dir / task_config_file
             if task_config_path_alt.exists():
-                print(f"Note: Task config '{task_config_file}' not found in tasks/, loading from {config_dir}")
+                logger.info(f" Task config '{task_config_file}' not found in tasks/, loading from {config_dir}")
                 task_config_path = task_config_path_alt
                 with open(task_config_path, 'r') as f:
                     try:
                         task_config = yaml.safe_load(f) or {}
                     except yaml.YAMLError as e:
-                        print(f"Error loading task config {task_config_path}: {e}")
+                        logger.error(f"Error loading task config {task_config_path}: {e}")
             else:
-                print(f"Warning: Task config file not found: {task_config_path} or {task_config_path_alt}")
+                logger.warning(f"Task config file not found: {task_config_path} or {task_config_path_alt}")
 
         # Merge Configs (Simple Recursive Update: Task overrides Base)
         def deep_update(d, u):
@@ -131,7 +136,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         self.config = base_config.copy()  # Start with base
         self.config = deep_update(self.config, task_config)  # Merge task config in
-        print(f"Configuration loaded and merged using task file: '{task_config_file}'.")
+        logger.info(f"Configuration loaded and merged using task file: '{task_config_file}'.")
 
     def _setup_pybullet_connection(self):
         """Connects to PyBullet and sets physics parameters from config."""
@@ -160,7 +165,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         p.setPhysicsEngineParameter(fixedTimeStep=self.timestep, numSolverIterations=num_solver_iterations,
                                     physicsClientId=self.client)
         p.setRealTimeSimulation(0, physicsClientId=self.client)
-        print("PyBullet connection established.")
+        logger.info("PyBullet connection established.")
 
     def _load_scene_assets(self):
         """Loads static scene assets like plane and table from config paths."""
@@ -175,7 +180,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                    physicsClientId=self.client)
         aabb = p.getAABB(self.table_id, -1, physicsClientId=self.client)
         self.table_height = aabb[1][2]
-        print(f"Scene assets loaded. Table height: {self.table_height:.3f}")
+        logger.info(f"Scene assets loaded. Table height: {self.table_height:.3f}")
 
     def _load_robot(self):
         """Loads the robot URDF specified in the config."""
@@ -189,14 +194,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                        useFixedBase=True,
                                        flags=p.URDF_USE_SELF_COLLISION | p.URDF_USE_INERTIA_FROM_FILE,
                                        physicsClientId=self.client)
-            print(f"Loaded robot with ID: {self.robot_id} from {robot_urdf_path}")
+            logger.info(f"Loaded robot with ID: {self.robot_id} from {robot_urdf_path}")
 
         except Exception as e:
-            print(f"LOAD FAILED: {e}"); self.close(); raise e
+            logger.critical(f"LOAD FAILED: {e}"); self.close(); raise e
 
     def _load_robot_parameters_from_config(self):
         """Loads robot parameters from config and stores essential ones on self."""
-        print("Loading robot parameters from config...")
+        logger.info("Loading robot parameters from config...")
         _robot_cfg = self.config.get('robot', {})
         self.robot_type = _robot_cfg.get('type', 'panda')
         # ... (rest of robot param loading onto self attributes: joint names, link names, gains, gripper values, home pose, grasp offset etc.) ...
@@ -229,7 +234,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     def _initialize_robot_info_and_state(self):
         """ Finds indices, limits, resets robot to home pose, enables motors. """
 
-        print("Initializing robot info and state...")
+        logger.info("Initializing robot info and state...")
         # 1. Find Indices using imported functions
         self.arm_joint_indices = find_joint_indices(self.robot_id, self.arm_joint_names, self.client)
         self.finger_indices = find_joint_indices(self.robot_id, self.finger_joint_names, self.client)
@@ -248,14 +253,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     self.ee_link_index, self.ee_link_name = fallback_link_idx_2, self.fallback_ee_link_name_2
                 else:
                     raise ValueError("Could not find suitable EE Link.")
-        print(f"  Using EE Link '{self.ee_link_name}' at index: {self.ee_link_index}")
+        logger.info(f"  Using EE Link '{self.ee_link_name}' at index: {self.ee_link_index}")
 
         # 2. Get Arm Limits and Gripper Limits using imported function
         self.arm_limits = get_arm_kinematic_limits_and_ranges(self.robot_id, self.arm_joint_indices, self.client)
-        print(f"  Arm Limits Extracted.")
+        logger.debug(f"  Arm Limits Extracted.")
 
         # 3. Reset Arm Joints State & Enable Motors (using self.home_pose_joints etc.)
-        print("  Initializing arm joints to home pose...")
+        logger.info("  Initializing arm joints to home pose...")
         for i, idx in enumerate(self.arm_joint_indices):
             p.resetJointState(self.robot_id, idx, self.home_pose_joints[i], 0.0, self.client)
             p.setJointMotorControl2(self.robot_id, idx, p.POSITION_CONTROL, targetPosition=self.home_pose_joints[i],
@@ -271,9 +276,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self._set_gripper_state('open', wait=False)  # Use internal method
 
         # 5. Settle Physics
-        print("  Stabilizing robot in home pose...")
+        logger.info("  Stabilizing robot in home pose...")
         wait_steps(100,client=self.client)
-        print("Robot Initialized.")
+        logger.info("Robot Initialized.")
 
     def _load_task_parameters(self):
         """Loads task parameters from config and stores essential ones."""
@@ -312,7 +317,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         Args:
             tasks_package: The imported 'tasks' package object.
-            BaseTask: The BaseTask class for validation.
+            base_task_class: The BaseTask class for validation.
 
         Raises:
             ValueError: If the task cannot be loaded, validated, or instantiated.
@@ -326,7 +331,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # Add warning only if the default was used because the key was missing
         if task_class_name == "BlockPlacementTask" and not task_config_dict.get('task_class_name'):
-            print(f"Warning: task_class_name not found in config, defaulting to {task_class_name}")
+            logger.warning(f"Warning: task_class_name not found in config, defaulting to {task_class_name}")
 
         # --- 2. Load Task Class Dynamically ---
         task_class = None
@@ -335,7 +340,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Append '_task' if needed (adjust based on your file naming convention)
         if not module_name.endswith("_task"): module_name += "_task"
 
-        print(f"DEBUG: Attempting to load class '{task_class_name}' from module '{module_name}'.")
+        logger.debug(f"DEBUG: Attempting to load class '{task_class_name}' from module '{module_name}'.")
         try:
             # Get the specific task *module* from the tasks *package*
             task_module = getattr(tasks_package, module_name, None)
@@ -345,23 +350,23 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         except Exception as e:
             # Catch potential errors during getattr calls
-            print(f"DEBUG: An error occurred during dynamic task class loading: {e}")
+            logger.error(f" An error occurred during dynamic task class loading: {e}")
             task_class = None  # Ensure class is None on error
 
         # --- 3. Validate and Instantiate ---
         if task_class and issubclass(task_class, base_task_class):
-            print(f"DEBUG: Successfully retrieved and validated class: {task_class}")
+            logging.debug(f"DEBUG: Successfully retrieved and validated class: {task_class}")
             try:
                 # Instantiate the task, passing the env instance and task-specific config
                 self.task = task_class(self, task_config_dict)  # Pass the whole task dict
-                print(f"Instantiated Task Object: {self.task.__class__.__name__}")
+                logging.info(f"Instantiated Task Object: {self.task.__class__.__name__}")
 
                 # --- 4. Set Environment Parameters from Task ---
                 # These are determined *by the task* based on its config
                 self.num_blocks = self.task.num_blocks
                 self.num_locations = getattr(self.task, 'num_locations', self.num_blocks)
                 self.num_dump_locations = getattr(self.task, 'num_dump_locations', 1)
-                print(
+                logging.debug(
                     f"DEBUG: Task parameters set: num_blocks={self.num_blocks}, num_locations={self.num_locations}")
 
             except Exception as e:
@@ -373,12 +378,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             error_msg = f"Could not find or validate task class '{task_class_name}'. "
             if not task_class:
                 error_msg += f"Class not found (checked module '{module_name}' in 'tasks'). Check name and tasks/__init__.py. "
-            elif not issubclass(task_class, base_task_class):
+            else:
                 error_msg += f"Class found but does not inherit from {base_task_class}. Check {base_task_class} import consistency. "
             raise ValueError(error_msg)
 
 
-        print("Task parameters loaded/updated.")
+        logging.info("Task parameters loaded/updated.")
 
     def _load_colors(self):
         """Loads color definitions from config and slices based on num_blocks."""
@@ -394,16 +399,16 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self.block_colors_rgba = all_block_colors[:self.num_blocks]
             self.target_colors_rgba = all_target_colors[:self.num_blocks]
         else:
-            print(f"Warning: num_blocks > defined colors. Colors will repeat.")
+            logging.warning(f"Warning: num_blocks > defined colors. Colors will repeat.")
             self.block_colors_rgba = (all_block_colors * (self.num_blocks // len(all_block_colors) + 1))[
                                      :self.num_blocks]
             self.target_colors_rgba = (all_target_colors * (self.num_blocks // len(all_target_colors) + 1))[
                                       :self.num_blocks]
-        print("Colors loaded and sliced.")
+        logging.info("Colors loaded and sliced.")
 
     def _setup_rl_interface(self):
         """Sets up action space and observation space based on loaded task config."""
-        print("Setting up RL interface...")
+        logging.info("Setting up RL interface...")
         # --- Get Task Dimensions from Config ---
         # These should have been loaded into self.config by _load_and_merge_configs
         _task_cfg = self.config.get('task', {})
@@ -424,7 +429,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Calculate total actions based on loaded dimensions
         self.num_actions = self.num_blocks + self.num_locations + self.num_dump_locations
         self.action_space = spaces.Discrete(self.num_actions)
-        print(
+        logging.info(
             f"  Action Space: Discrete({self.num_actions}) ({self.num_blocks} Pick, {self.num_locations} PlaceTarget, {self.num_dump_locations} PlaceDump)")
 
         # --- Observation Space ---
@@ -437,16 +442,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             shape=(self.image_size, self.image_size, 3),
             dtype=np.uint8
         )
-        print(f"  Observation Space: Box(shape=({self.image_size}, {self.image_size}, 3))")
+        logging.info(f"  Observation Space: Box(shape=({self.image_size}, {self.image_size}, 3))")
 
-        print("RL interface setup complete.")
+        logging.info("RL interface setup complete.")
 
     # ==================================================================
     # --- Reset ---
     # ==================================================================
-        # Inside PhysicsBlockRearrangementEnv class in block_rearrangement_env.py
 
-        # Inside PhysicsBlockRearrangementEnv class in block_rearrangement_env.py
 
     def reset(self, seed=None, options=None):
         """
@@ -485,7 +488,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # ------------------------------------
 
         # --- 2. Reset Robot Pose to Home ---
-        print("Resetting robot to home pose...")
+        logging.debug("Resetting robot to home pose...")
         if hasattr(self, 'arm_joint_indices') and self.arm_joint_indices:  # Check if initialized
             for i, idx in enumerate(self.arm_joint_indices):
                 p.resetJointState(self.robot_id, idx, self.home_pose_joints[i], 0.0, self.client)
@@ -499,21 +502,21 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self._set_gripper_state("open", wait=False)
             wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)  # Short wait for stability
         else:
-            print("Warning: Robot arm/gripper indices not available during reset. Skipping pose reset.")
+            logging.warning("Warning: Robot arm/gripper indices not available during reset. Skipping pose reset.")
         # --------------------------------
 
         # --- 3. Delegate Task-Specific Setup ---
         if self.task is None:
             raise RuntimeError("Task object (self.task) not initialized before reset. Check __init__.")
 
-        print("Calling task reset_task_scenario...")
+        logging.debug("Calling task reset_task_scenario...")
         task_info = None  # Initialize task_info
         try:
             # The task will define targets, goals, and trigger spawning
             task_info = self.task.reset_task_scenario()  # Store the result
-            print("Task scenario reset complete.")
+            logging.debug("Task scenario reset complete.")
         except Exception as e:
-            print(f"FATAL: Error during task reset_task_scenario: {e}")
+            logging.critical(f"FATAL: Error during task reset_task_scenario: {e}")
             import traceback
             traceback.print_exc()
             self.close()
@@ -521,7 +524,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # -----------------------------------------
 
         # --- 4. Settle Simulation ---
-        print("Waiting for objects to settle after task reset...")
+        logging.debug("Waiting for objects to settle after task reset...")
         wait_steps(150, self.client, timestep=self.timestep, use_gui=self.use_gui)
         # -------------------------
 
@@ -532,7 +535,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         if isinstance(task_info, dict):
             info.update(task_info)  # Add info returned by the task
 
-        print("Environment reset finished.")
+        logging.debug("Environment reset finished.")
         # --- ADD THIS LINE ---
         return observation, info
             # ---------------------
@@ -541,63 +544,57 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # --- Core Step and Primitive Execution ---
     # ==================================================================
 
-    def step(self, action):
-        # Store state before action for potential reward shaping or info
-        # info_before = self._get_info()
-        # current_goal_status = self._check_goal() # Check before action
+    def step(self, action_):
 
-        success = self._execute_primitive(action) # Execute skill
+        success_ = self._execute_primitive(action_) # Execute skill
 
-        observation = self._get_obs()
-        terminated = self._check_goal()
-        reward = self.goal_reward if terminated else self.step_penalty
+        observation_ = self._get_obs()
+        terminated_ = self.task.check_goal()
+        reward_ = self.goal_reward if terminated_ else self.step_penalty
         self.current_steps += 1
-        truncated = self.current_steps >= self.max_steps
+        truncated_ = self.current_steps >= self.max_steps
 
         # Add penalties based on primitive failure
-        if not success:
-            reward += self.move_fail_penalty # Generic failure penalty (covers IK, reachability, grasp check etc.)
+        if not success_:
+            reward_ += self.move_fail_penalty
 
-        info = self._get_info()
-        info['primitive_success'] = success
+        info_ = self._get_info()
+        info_['primitive_success'] = success_
 
-        # More advanced reward shaping could go here
-        # e.g., reward for picking up correct block, reward for placing block on target
-
-        return observation, reward, terminated, truncated, info
+        return observation_, reward_, terminated_, truncated_, info_
 
     def _execute_primitive(self, action_index):
         """ Executes the high-level skill based on action_index. Returns True if skill sequence succeeds. """
-        print(f"\n--- Executing Action Index: {action_index} ---")
-        ori_down = p.getQuaternionFromEuler([np.pi, 0.0, 0.0])  # Used for placing
+        logging.debug(f"\n--- Executing Action Index: {action_index} ---")
+        ori_down = p.getQuaternionFromEuler([np.pi, 0.0, 0.0])
 
         try:
             # --- Action: Pick_Block(block_idx) ---
             if 0 <= action_index < self.num_blocks:
                 block_idx_to_pick = action_index
-                print(f"Attempting Pick_Block({block_idx_to_pick})")
+                logging.debug(f"Attempting Pick_Block({block_idx_to_pick})")
                 # Check preconditions: not holding, valid index
                 if self.held_object_id is not None:
-                    print("  Failure: Already holding.")
+                    logging.debug("  Failure: Already holding.")
                     return False
                 if block_idx_to_pick >= len(self.block_ids):
-                    print(f"  Failure: Invalid block index {block_idx_to_pick}")
+                    logging.debug(f"  Failure: Invalid block index {block_idx_to_pick}")
                     return False
                 block_id = self.block_ids[block_idx_to_pick]
 
                 try:  # Get block pose AND ORIENTATION
                     block_pos, block_orn_quat = p.getBasePositionAndOrientation(block_id, physicsClientId=self.client)
                     block_euler = p.getEulerFromQuaternion(block_orn_quat)
-                    print(
+                    logging.debug(
                         f"  Block {block_idx_to_pick} Pose: Pos={np.round(block_pos, 3)}, Euler={np.round(block_euler, 2)}")
                 except Exception as e:
-                    print(f"  Failure: Cannot get pose for block {block_id}. {e}")
+                    logging.warning( f"  Failure: Cannot get pose for block {block_id}. {e}")
                     return False
 
                 # --- Calculate Target Orientation based on Block Yaw ---
                 block_yaw = block_euler[2]
                 target_ori = p.getQuaternionFromEuler([np.pi, 0.0, block_yaw])
-                print(f"Target Grasp Ori (Euler): {np.round(p.getEulerFromQuaternion(target_ori), 2)}")
+                logging.debug(f"Target Grasp Ori (Euler): {np.round(p.getEulerFromQuaternion(target_ori), 2)}")
 
                 # Calculate poses relative to current block pos and TOP surface
                 object_top_z = block_pos[2] + self.block_half_extents[2]
@@ -609,19 +606,19 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 lift_pos = [block_pos[0], block_pos[1], lift_pos_z]
 
                 # --- Pick Sequence ---
-                print("  1. Opening gripper (just in case)...")
+                logging.debug("  1. Opening gripper (just in case)...")
                 self._set_gripper_state("open", wait=True)
 
-                print("  2. Moving above block (adjusted ori)...")
+                logging.debug("  2. Moving above block (adjusted ori)...")
                 # Move to pre-grasp using the block-aligned orientation
                 if not self._move_ee_to_pose(pre_grasp_pos, target_ori):
-                    print("  Failure: Could not reach pre-grasp pose.")
+                    logging.warning("  Failure: Could not reach pre-grasp pose.")
                     return False  # Give up if pre-grasp fails
 
-                print("  3. Moving down to grasp (adjusted ori)...")
+                logging.debug("  3. Moving down to grasp (adjusted ori)...")
                 # Move down using the block-aligned orientation
                 if not self._move_ee_to_pose(grasp_pos, target_ori):
-                    print("  Move down failed. Aborting pick.")
+                    logging.warning("  Move down failed. Aborting pick.")
                     self._set_gripper_state("open", wait=False)
                     current_pos, current_ori = self._get_ee_pose()
                     if current_pos:  # Try to recover upwards
@@ -631,7 +628,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     return False
 
                 # *** Move down succeeded, now close the gripper ***
-                print("  4. Closing gripper...")
+                logging.debug("  4. Closing gripper...")
                 self._set_gripper_state("close", wait=True)
 
                 # Optional: Check if gripper closed sufficiently
@@ -641,16 +638,16 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     closed_check_val = self.gripper_closed_value + 0.01  # Allow tolerance
                     finger1_val = states[0][0]
                     finger2_val = states[1][0]
-                    print(
+                    logging.debug(
                         f"  Gripper state after close command: {finger1_val:.4f}, {finger2_val:.4f} (Target: {self.gripper_closed_value:.4f})")
                     # Check if BOTH fingers are sufficiently closed
                     if finger1_val > closed_check_val or finger2_val > closed_check_val:
-                        print(f"  WARNING: Gripper did not close sufficiently. Aborting grasp.")
+                        logging.warning(f"  WARNING: Gripper did not close sufficiently. Aborting grasp.")
                         self._set_gripper_state("open", wait=False)
                         self._move_ee_to_pose(pre_grasp_pos, target_ori)  # Move back up
                         return False
 
-                print("  5. Attaching object...")
+                logging.debug("  5. Attaching object...")
                 try:
                     # Calculate relative orientation at grasp moment
                     ee_state = p.getLinkState(self.robot_id, self.ee_link_index, physicsClientId=self.client)
@@ -675,19 +672,19 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     )
 
                     if self.grasp_constraint_id < 0: raise Exception("createConstraint failed")
-                    print(f"  Constraint created: {self.grasp_constraint_id}")
+                    logging.debug(f"  Constraint created: {self.grasp_constraint_id}")
                 except Exception as e:
-                    print(f"  Failure: Error creating constraint: {e}")
+                    logging.error(f"  Failure: Error creating constraint: {e}")
                     self._set_gripper_state("open", wait=False)
                     return False
                 wait_steps(60, self.client, timestep=self.timestep, use_gui=self.use_gui)
                 self.held_object_id = block_id
                 self.held_object_idx = block_idx_to_pick
 
-                print("  6. Lifting block...")
+                logging.debug("  6. Lifting block...")
                 if not self._move_ee_to_pose(lift_pos, target_ori):
                     # Lift failure cleanup
-                    print("  Lift failed, releasing constraint and object.")
+                    logging.warning("  Lift failed, releasing constraint and object.")
 
                     # 1. Attempt to remove constraint
                     if self.grasp_constraint_id is not None:
@@ -707,7 +704,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     # 4. Return Failure
                     return False
 
-                print("  Pick sequence successful.")
+                logging.debug("  Pick sequence successful.")
                 return True
 
 
@@ -717,10 +714,10 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 is_dump = (action_index == self.num_blocks + self.num_locations)
                 target_loc_idx = action_index - self.num_blocks if not is_dump else -1
                 loc_name = "Dump" if is_dump else f"Target({target_loc_idx})"
-                print(f"Attempting Place_{loc_name}")
+                logging.debug(f"Attempting Place_{loc_name}")
 
                 if self.held_object_id is None:
-                    print("  Failure: Not holding object.")
+                    logging.warning("  Failure: Not holding object.")
                     return False
 
                 target_pos_table = self.dump_location_pos if is_dump else self.target_locations_pos[target_loc_idx]
@@ -735,21 +732,21 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 post_place_pos_z = pre_place_pos_z
                 post_place_pos = [target_pos_table[0], target_pos_table[1], post_place_pos_z]
 
-                print(f"  1. Moving above {loc_name}...")
+                logging.debug(f"  1. Moving above {loc_name}...")
                 if not self._move_ee_to_pose(pre_place_pos, ori_down):
                     return False
 
-                print(f"  2. Moving down to {loc_name}...")
+                logging.debug(f"  2. Moving down to {loc_name}...")
                 place_move_success = self._move_ee_to_pose(place_pos, ori_down)  # Uses new place_pos
                 if not place_move_success:
-                    print(f"  Warning: Did not fully reach {loc_name} pose.")
+                    logging.warning(f"  Warning: Did not fully reach {loc_name} pose.")
 
-                print("  3. Releasing object...")
+                logging.debug("  3. Releasing object...")
                 if self.grasp_constraint_id is not None:
                     try:
                         p.removeConstraint(self.grasp_constraint_id, physicsClientId=self.client)
                     except Exception as e:
-                        print(f"  Warning: Failed removing constraint {self.grasp_constraint_id}: {e}")
+                        logging.debug(f"  Warning: Failed removing constraint {self.grasp_constraint_id}: {e}")
                     self.grasp_constraint_id = None
 
 
@@ -760,17 +757,17 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
                 wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)
 
-                print("  4. Moving arm up...")
+                logging.debug("  4. Moving arm up...")
                 self._move_ee_to_pose(post_place_pos, ori_down)
-                print(f"  {loc_name} sequence finished.")
+                logging.debug(f"  {loc_name} sequence finished.")
                 return True
 
             else:  # Unknown action
-                print(f"Warning: Unknown action index {action_index}")
+                logging.warning(f"Warning: Unknown action index {action_index}")
                 return False
 
         except Exception as e:  # Catch any unexpected errors in primitive execution
-            print(f"!! Error during primitive execution for action {action_index}: {type(e).__name__} - {e}")
+            logging.error(f"!! Error during primitive execution for action {action_index}: {type(e).__name__} - {e}")
             import traceback
             traceback.print_exc()
             if self.grasp_constraint_id is not None:
@@ -801,20 +798,20 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         Returns:
             bool: True if the command was sent successfully, False otherwise.
         """
-        print(f"Commanding gripper {state.upper()}")
+        logging.debug(f"Commanding gripper {state.upper()}")
         if state == 'open':
             target_value = self.gripper_open_value
         elif state == 'close':
             target_value = self.gripper_closed_value
         else:
-            print(f"Error: Invalid gripper state '{state}'. Use 'open' or 'close'.")
+            logging.error(f"Error: Invalid gripper state '{state}'. Use 'open' or 'close'.")
             return False
 
         if not self.finger_indices:
-            print("Error: Gripper finger indices not set.")
+            logging.error("Error: Gripper finger indices not set.")
             return False
         if len(self.finger_indices) != 2:
-            print(f"Error: Expected 2 finger indices, found {len(self.finger_indices)}.")
+            logging.error(f"Error: Expected 2 finger indices, found {len(self.finger_indices)}.")
             return False
 
         try:
@@ -834,7 +831,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 wait_steps(self.gripper_wait_steps, self.client, timestep=self.timestep, use_gui=self.use_gui)
             return True  # Command sent successfully
         except Exception as e:
-            print(f"Error during setJointMotorControlArray for gripper: {e}")
+            logging.error(f"Error during setJointMotorControlArray for gripper: {e}")
             return False
 
 
@@ -843,12 +840,11 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self._last_ik_failure = False # Reset IK failure flag for this attempt
 
         if self.arm_limits is None:
-            print("Error: Arm limits not set.")
+            logging.error("Error: Arm limits not set.")
             return False
 
         ll, ul, jr = self.arm_limits
 
-        # print(f"  Attempting IK for Pose: Pos={np.round(target_pos, 3)}, Ori={np.round(p.getEulerFromQuaternion(target_ori), 2)}") # Moved print outside
         start_ik_time = time.time()
         joint_poses = p.calculateInverseKinematics(
             self.robot_id, self.ee_link_index, target_pos, target_ori,
@@ -862,8 +858,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         if valid_solution:
             arm_joint_poses = joint_poses[:len(self.arm_joint_indices)]
-            print(f"  ----> IK Succeeded! (Took {ik_time:.4f} s)")
-            print("        Commanding Arm Motion...")
+            logging.debug(f"  ----> IK Succeeded! (Took {ik_time:.4f} s)")
+            logging.debug("        Commanding Arm Motion...")
 
             p.setJointMotorControlArray(self.robot_id, self.arm_joint_indices, p.POSITION_CONTROL,
                                         targetPositions=arm_joint_poses,
@@ -886,16 +882,16 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 ori_ok = abs(ori_angle) < self.orientation_reached_threshold
 
                 if pos_ok and ori_ok:
-                    print(f"        SUCCESS: Reached Target Pose! Dist: {final_dist:.4f}, Ori angle err: {abs(ori_angle):.4f}")
+                    logging.debug(f"        SUCCESS: Reached Target Pose! Dist: {final_dist:.4f}, Ori angle err: {abs(ori_angle):.4f}")
                 else:
-                    print(f"        FAILURE: Did not reach Target Pose. Dist: {final_dist:.4f} (OK={pos_ok}), Ori angle err: {abs(ori_angle):.4f} (OK={ori_ok})")
+                    logging.debug(f"        FAILURE: Did not reach Target Pose. Dist: {final_dist:.4f} (OK={pos_ok}), Ori angle err: {abs(ori_angle):.4f} (OK={ori_ok})")
                 return pos_ok and ori_ok
 
             except Exception as e:
-                print(f"        Error checking final pose: {e}") # Added indent
+                logging.debug(f"        Error checking final pose: {e}") # Added indent
                 return False
         else:
-            print(f"  ----> IK Failed! (Took {ik_time:.4f} s)")
+            logging.warning(f"  ----> IK Failed! (Took {ik_time:.4f} s)")
             self._last_ik_failure = True # Set flag if IK itself failed
             return False
 
@@ -906,7 +902,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                         physicsClientId=self.client)
             return link_state[4], link_state[5]  # world pos, world orn
         except Exception as e:
-            print(f"Error getting EE pose: {e}")
+            logging.error(f"Error getting EE pose: {e}")
             return None, None
 
     # ==================================================================
@@ -917,14 +913,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         """Places visual markers (plates) at the target locations."""
         self.target_ids = []  # Clear previous visuals
         if not hasattr(self, 'target_locations_pos') or not self.target_locations_pos:
-            print("Warning: Target locations not defined, cannot place visuals.")
+            logging.warning("Warning: Target locations not defined, cannot place visuals.")
             return
         if not hasattr(self, 'goal_config') or not self.goal_config:
-            print("Warning: Goal config not defined, cannot color visuals correctly.")
+            logging.warning("Warning: Goal config not defined, cannot color visuals correctly.")
             # Decide on fallback behavior? e.g., use sequential colors?
             # return # Or proceed with default colors
 
-        print(f"Placing {len(self.target_locations_pos)} target visuals...")
+        logging.debug(f"Placing {len(self.target_locations_pos)} target visuals...")
 
         # We need to map target_location_index back to the original block_index
         # to get the correct color based on the goal config.
@@ -957,18 +953,18 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     if plate_id >= 0:
                         self.target_ids.append(plate_id)
                     else:
-                        print(f"Warning: Failed to create target plate visual for loc idx {i}")
+                        logging.warning(f"Warning: Failed to create target plate visual for loc idx {i}")
                 except Exception as e:
-                    print(f"Error creating target plate visual for loc idx {i}: {e}")
+                    logging.error(f"Error creating target plate visual for loc idx {i}: {e}")
             else:
-                print(f"Warning: No block assigned to target location index {i} in goal_config. Skipping visual.")
+                logging.warning(f"Warning: No block assigned to target location index {i} in goal_config. Skipping visual.")
 
     def _spawn_blocks(self, num_blocks_to_spawn):
         """Spawns the required number of blocks in valid random positions."""
         self.block_ids = []  # Clear previous blocks
-        print(f"Spawning {num_blocks_to_spawn} blocks...")
+        logging.debug(f"Spawning {num_blocks_to_spawn} blocks...")
         if not hasattr(self, 'spawn_area_bounds'):
-            self.spawn_area_bounds = self._define_spawn_area()  # Define if not already defined
+            self.spawn_area_bounds = self.task.define_spawn_area()
 
         available_spawn_locations = self._get_valid_spawn_positions(num_blocks_to_spawn)
         if len(available_spawn_locations) < num_blocks_to_spawn:
@@ -991,97 +987,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 p.changeDynamics(block_id, -1, mass=0.1, lateralFriction=0.6, physicsClientId=self.client)
                 self.block_ids.append(block_id)
             except Exception as e:
-                print(f"Error loading block {i}: {e}")
+                logging.error(f"Error loading block {i}: {e}")
                 raise e
-
-    def _define_locations(self, num_locs, is_target, pattern_type='line_y', target_area_bounds=None):
-        """
-        Defines locations on the table.
-        If is_target=True, generates positions based on pattern_type.
-        If is_target=False, generates dump location(s).
-        """
-        locations = []
-        center_x = self.table_start_pos[0] + 0.0 # Center relative to table X
-        center_y = 0.0
-        z_pos = self.table_height # Base Z for targets/dump is table height
-
-        if is_target:
-            print(f"  Defining {num_locs} target locations with pattern: {pattern_type}")
-            min_target_dist_sq = (self.block_scale * 2.0)**2 # Min distance between target centers
-
-            if pattern_type == 'line_y':
-                target_spacing = 0.15
-                line_x = center_x + 0.20 # Place line forward from center
-                y_start = center_y - target_spacing * (num_locs - 1) / 2.0 # Center the line around Y=0
-                for i in range(num_locs):
-                    locations.append([line_x, y_start + i * target_spacing, z_pos])
-
-            elif pattern_type == 'circle':
-                radius = 0.18 # Radius of the circle
-                # Slightly offset circle center forward to avoid robot base
-                circle_center_x = center_x + 0.15
-                circle_center_y = center_y
-                # Start angle slightly offset so positions aren't exactly on axes if possible
-                angle_offset = self.np_random.uniform(0, math.pi / num_locs) if num_locs > 0 else 0
-                for i in range(num_locs):
-                    angle = angle_offset + 2 * math.pi * i / num_locs
-                    x = circle_center_x + radius * math.cos(angle)
-                    y = circle_center_y + radius * math.sin(angle)
-                    # Basic check to keep within reasonable table bounds (optional)
-                    if abs(x - self.table_start_pos[0]) > 0.4 or abs(y) > 0.4:
-                         print(f"Warning: Circle target {i} potentially off table, adjusting.")
-                         # Simple fallback: place near center (or implement retry)
-                         x = circle_center_x + 0.1 * math.cos(angle)
-                         y = circle_center_y + 0.1 * math.sin(angle)
-                    locations.append([x, y, z_pos])
-
-            elif pattern_type == 'random_scatter':
-                 if target_area_bounds is None:
-                      # Define default target area bounds: right side of the table
-                      target_area_bounds = [center_x + 0.05, center_x + 0.25, -0.2, 0.2] # [minX, maxX, minY, maxY]
-                 print(f"    Scattering targets within: {np.round(target_area_bounds, 2)}")
-                 attempts = 0
-                 max_attempts = num_locs * 50 # Limit attempts
-                 while len(locations) < num_locs and attempts < max_attempts:
-                    attempts += 1
-                    x = self.np_random.uniform(target_area_bounds[0], target_area_bounds[1])
-                    y = self.np_random.uniform(target_area_bounds[2], target_area_bounds[3])
-                    # Check distance to other targets chosen *this episode*
-                    too_close = False
-                    for loc in locations:
-                         dist_sq = (loc[0]-x)**2 + (loc[1]-y)**2
-                         if dist_sq < min_target_dist_sq:
-                              too_close = True
-                              break
-                    if not too_close:
-                         locations.append([x, y, z_pos]) # Store base Z only
-                 if len(locations) < num_locs: print(f"Warning: Only placed {len(locations)}/{num_locs} random targets.")
-
-            else:
-                print(f"Warning: Unknown target pattern type '{pattern_type}'. Using default line_y.")
-                # Fallback to line_y (copy logic from above)
-                target_spacing = 0.15
-                line_x = center_x + 0.20
-                y_start = center_y - target_spacing * (num_locs - 1) / 2.0
-                for i in range(num_locs):
-                    locations.append([line_x, y_start + i * target_spacing, z_pos])
-
-        else: # Define Dump location(s) - Keep fixed relative to table center for simplicity
-             dump_x = self._dump_location_base_pos[0]
-             dump_y = self._dump_location_base_pos[1]
-             for i in range(num_locs): # Allows multiple dump locs if needed later
-                 # Simple fixed position for the first dump location, stagger others
-                 locations.append([dump_x, dump_y + i*0.1, z_pos])
-
-        return locations
-
-    def _define_spawn_area(self):
-        # Rectangle in front-left relative to robot base
-        min_x = self.table_start_pos[0] + 0.0 # Align with table center X
-        max_x = self.table_start_pos[0] + 0.25
-        min_y = -0.20
-        max_y = -0.05 # Spawn on left side
-        return [min_x, max_x, min_y, max_y]
 
     # Inside PhysicsBlockRearrangementEnv class
 
@@ -1100,7 +1007,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             elif len(self.dump_location_pos) >= 2:  # Single dump loc [x, y, z]
                 target_dump_poses_xy.append([self.dump_location_pos[0], self.dump_location_pos[1]])
             else:
-                print("Warning: dump_location_pos format unexpected, skipping dump location check.")
+                logging.warning("Warning: dump_location_pos format unexpected, skipping dump location check.")
 
         attempts = 0
         max_attempts = num_required * 100
@@ -1125,7 +1032,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             valid_positions.append(candidate_pos)
 
         if len(valid_positions) < num_required:
-            print(f"Warning: Only found {len(valid_positions)}/{num_required} valid spawn locations.")
+            logging.warning(f"Warning: Only found {len(valid_positions)}/{num_required} valid spawn locations.")
         return valid_positions
 
     def _get_obs(self):
@@ -1136,7 +1043,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             rgb_array = np.array(px, dtype=np.uint8)[:, :, :3]
             return rgb_array
         except Exception as e:
-             print(f"Error getting camera image: {e}. Returning blank image.")
+             logging.error(f"Error getting camera image: {e}. Returning blank image.")
              return np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
 
     def _get_info(self):
@@ -1166,14 +1073,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             if self.use_gui:
                 time.sleep(0.01)
                 return None
-        else: return super(PhysicsBlockRearrangementEnv, self).render(mode=mode)
+        else: return super(PhysicsBlockRearrangementEnv, self).render()
 
     def close(self):
         if hasattr(self, 'client') and self.client >= 0:
             try:
                 if p.isConnected(physicsClientId=self.client):
                      p.disconnect(physicsClientId=self.client)
-            except Exception as e: print(f"Error disconnecting PyBullet: {e}")
+            except Exception as e: logging.error(f"Error disconnecting PyBullet: {e}")
             self.client = -1
 
 

@@ -7,4 +7,5 @@ task:
   target_pattern: 'line_y'
   # target_spacing: 0.15 # Optional: override default spacing
   # line_x_offset: 0.20 # Optional: override default offset
+  spawn_bounds_relative: [0.05, 0.25, -0.25, -0.1]
   max_episode_steps: 100

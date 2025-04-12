@@ -14,30 +14,42 @@ class BlockPlacementTask(BaseTask):
     def _load_task_params(self):
         """Load parameters for the placement task."""
         self.num_blocks = self.config.get("num_blocks", 2)
-        # Get the target pattern type for this task instance
         self.target_pattern = self.config.get("target_pattern", "line_y")
-        # Load parameters potentially used by different patterns
-        self.target_spacing = self.config.get("target_spacing", 0.15) # For line
-        self.line_x_offset = self.config.get("line_x_offset", 0.20)  # For line
-        self.circle_radius = self.config.get("circle_radius", 0.18) # For circle
-        self.circle_center_offset = self.config.get("circle_center_offset", [0.15, 0.0]) # For circle [x,y]
-        # Bounds for random scatter relative to table center [minX, maxX, minY, maxY]
+        self.target_spacing = self.config.get("target_spacing", 0.15)
+        self.line_x_offset = self.config.get("line_x_offset", 0.20)
+        self.circle_radius = self.config.get("circle_radius", 0.18)
+        self.circle_center_offset = self.config.get("circle_center_offset", [0.15, 0.0])
         self.target_scatter_bounds = self.config.get("target_scatter_bounds", [0.05, 0.25, -0.2, 0.2])
-        # Goal checking parameter
         self.goal_dist_threshold = self.config.get("goal_dist_threshold", 0.04)
 
-        # Set num_locations based on num_blocks for this task type
+        self.spawn_bounds_relative = self.config.get("spawn_bounds_relative", [0.0, 0.25, -0.20, -0.05]) # [minX, maxX, minY, maxY] relative to table center
+
         self.num_locations = self.num_blocks
-        # Get num_dump locations from task config or default
-        self.num_dump_locations = self.config.get("num_dump_locations", 1) # Allow overriding dump num
+        self.num_dump_locations = self.config.get("num_dump_locations", 1)
 
         print(f"  BlockPlacementTask: Loaded params - num_blocks={self.num_blocks}, pattern='{self.target_pattern}'")
+
+    def define_spawn_area(self) -> list[float]:
+        """Defines the block spawn area based on task config."""
+        # Get table center X from the environment instance
+        table_center_x = self.env.table_start_pos[0]
+        table_center_y = self.env.table_start_pos[1] # Usually 0
+
+        # Calculate absolute bounds based on relative config and table center
+        min_x = table_center_x + self.spawn_bounds_relative[0]
+        max_x = table_center_x + self.spawn_bounds_relative[1]
+        min_y = table_center_y + self.spawn_bounds_relative[2]
+        max_y = table_center_y + self.spawn_bounds_relative[3]
+
+        spawn_bounds = [min_x, max_x, min_y, max_y]
+        print(f"  Task defined spawn area: {np.round(spawn_bounds, 2)}")
+        return spawn_bounds
 
     def reset_task_scenario(self):
         """Set up the placement task scenario based on the chosen pattern."""
         env = self.env # Shortcut
 
-        # 1. Define Target Locations based on self.target_pattern
+        # 1. Define Target Locations (using self.target_pattern)
         target_locs = []
         center_x = env.table_start_pos[0]
         center_y = env.table_start_pos[1] # Usually 0
@@ -51,7 +63,7 @@ class BlockPlacementTask(BaseTask):
             y_start = center_y - self.target_spacing * (self.num_locations - 1) / 2.0
             for i in range(self.num_locations):
                 target_locs.append([line_x, y_start + i * self.target_spacing, z_pos])
-
+        # ... (elif 'circle', elif 'random_scatter', else) ...
         elif self.target_pattern == 'circle':
             radius = self.circle_radius
             circle_center_x = center_x + self.circle_center_offset[0]
@@ -61,9 +73,7 @@ class BlockPlacementTask(BaseTask):
                 angle = angle_offset + 2 * math.pi * i / self.num_locations
                 x = circle_center_x + radius * math.cos(angle)
                 y = circle_center_y + radius * math.sin(angle)
-                # Optional: Add bounds check
                 target_locs.append([x, y, z_pos])
-
         elif self.target_pattern == 'random_scatter':
              bounds = [ # Calculate absolute bounds
                  center_x + self.target_scatter_bounds[0], center_x + self.target_scatter_bounds[1],
@@ -78,55 +88,53 @@ class BlockPlacementTask(BaseTask):
                 too_close = any(((loc[0]-x)**2 + (loc[1]-y)**2 < min_target_dist_sq) for loc in target_locs)
                 if not too_close: target_locs.append([x, y, z_pos])
              if len(target_locs) < self.num_locations: print(f"Warning: Only placed {len(target_locs)}/{self.num_locations} random targets.")
-
         else: # Fallback or error for unknown pattern
             print(f"Warning: Unknown target pattern '{self.target_pattern}'. Using default line_y.")
-            # Fallback to line_y logic...
             target_spacing = 0.15; line_x = center_x + 0.20
             y_start = center_y - target_spacing * (self.num_locations - 1) / 2.0
             for i in range(self.num_locations): target_locs.append([line_x, y_start + i * target_spacing, z_pos])
 
+
         env.target_locations_pos = target_locs # Set target locations in main env
 
-        # 2. Define Goal Config (Simple: Block i must go to Target i)
-        # Locations are indexed 0..M-1 in env.target_locations_pos
-        # Blocks are indexed 0..N-1 in env.block_ids (N=M for this task)
-        # goal_config maps target_location_index -> required_block_index
-        env.goal_config = {i: i for i in range(self.num_locations)} # Block i -> Target i
+        # --- Define Dump Location (if needed) ---
+        # Although BlockPlacement doesn't use dump, we should still define the pos
+        # if num_dump_locations > 0, based on env's _dump_location_base_pos
+        env.dump_location_pos = []
+        if self.num_dump_locations > 0:
+             # Use the base position stored in the env, potentially generating multiple
+             dump_base_x = env._dump_location_base_pos[0]
+             dump_base_y = env._dump_location_base_pos[1]
+             for i in range(self.num_dump_locations):
+                 # Simple fixed position for the first dump location, stagger others
+                 env.dump_location_pos.append([dump_base_x, dump_base_y + i*0.1, z_pos])
+
+
+        # 2. Define Goal Config
+        env.goal_config = {i: i for i in range(self.num_locations)}
 
         # 3. Trigger Spawning of Blocks and Target Visuals in Env
-        # Ensure color lists are ready based on self.num_blocks in main env
-        env._load_colors() # Reload/slice colors based on the task's num_blocks
+        env._load_colors()
         env._place_target_visuals()
-        env._spawn_blocks(self.num_blocks)
+        env._spawn_blocks(self.num_blocks) # This now uses env.spawn_area_bounds set in env.__init__
 
         print(f"  Task Scenario Reset: {self.config.get('name', 'BlockPlacementTask')} - {self.num_blocks} blocks, pattern '{self.target_pattern}'.")
         return {"task_type": "BlockPlacement", "pattern": self.target_pattern}
 
     def check_goal(self) -> bool:
-        """Check if Block i is on Target i for all i."""
         env = self.env
         if env.held_object_id is not None: return False
-
-        # Need to check against the goal config defined in reset
-        if not env.goal_config: return False # No goal defined
-
+        if not env.goal_config: return False
         on_target_count = 0
         for target_loc_idx, required_block_idx in env.goal_config.items():
-            # Ensure indices are valid
-            if required_block_idx >= len(env.block_ids) or target_loc_idx >= len(env.target_locations_pos):
-                continue
-
+            if required_block_idx >= len(env.block_ids) or target_loc_idx >= len(env.target_locations_pos): continue
             block_id = env.block_ids[required_block_idx]
             target_pos = env.target_locations_pos[target_loc_idx]
-
             try:
                 current_pos, _ = p.getBasePositionAndOrientation(block_id, physicsClientId=env.client)
                 dist_xy = np.linalg.norm(np.array(current_pos[:2]) - np.array(target_pos[:2]))
                 on_surface = abs(current_pos[2] - (env.table_height + env.block_half_extents[2])) < 0.02
                 if dist_xy < self.goal_dist_threshold and on_surface:
                     on_target_count += 1
-            except Exception: return False # Error reading state
-
-        # Goal met if all required blocks are on their assigned targets
+            except Exception: return False
         return on_target_count == len(env.goal_config)

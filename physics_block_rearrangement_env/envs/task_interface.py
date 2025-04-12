@@ -62,6 +62,17 @@ class BaseTask(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def define_spawn_area(self) -> list[float]:
+        """
+        Define the rectangular bounds [min_x, max_x, min_y, max_y] for spawning blocks.
+        Coordinates are relative to the world frame.
+
+        Returns:
+            list[float]: A list containing [min_x, max_x, min_y, max_y].
+        """
+        raise NotImplementedError
+
     # --- Optional Methods for more advanced tasks ---
     # def compute_reward(self, previous_state_info, current_state_info, action_info) -> float:
     #     """Calculate task-specific rewards beyond simple step penalty/goal reward."""

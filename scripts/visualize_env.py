@@ -33,12 +33,6 @@ try:
     robot_id = p.loadURDF(urdf_path, robot_start_pos, robot_start_orientation, useFixedBase=True)
     print(f"Robot loaded successfully with ID: {robot_id}")
 
-    # Optional: Print joint info to verify
-    # num_joints = p.getNumJoints(robot_id)
-    # print(f"Number of joints: {num_joints}")
-    # for i in range(num_joints):
-    #    print(p.getJointInfo(robot_id, i))
-
 except Exception as e:
     print(f"***** ERROR loading URDF: {e} *****")
     print("Check the URDF file path and mesh paths inside the URDF!")
