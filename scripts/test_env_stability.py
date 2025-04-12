@@ -66,7 +66,7 @@ def run_stability_test():
 
     try:
         # Create the environment (always headless for stability/speed)
-        env_kwargs = {'use_gui': False, 'render_mode': 'human'} # Must be rgb_array to get obs
+        env_kwargs = {'use_gui': False, 'render_mode': 'rgb_array'} # Must be rgb_array to get obs
         if TASK_CONFIG_FILE:
             env_kwargs['task_config_file'] = TASK_CONFIG_FILE
 
