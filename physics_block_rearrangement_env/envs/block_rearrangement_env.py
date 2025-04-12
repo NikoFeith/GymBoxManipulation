@@ -3,11 +3,15 @@ from gymnasium import spaces
 import pybullet as p
 import pybullet_data
 import os
+import re
 from pathlib import Path
 import yaml
 import math
 
 from physics_block_rearrangement_env.utils.robot_utils import *
+from physics_block_rearrangement_env.envs.task_interface import BaseTask
+from physics_block_rearrangement_env.envs import tasks
+
 
 
 class PhysicsBlockRearrangementEnv(gym.Env):
@@ -18,8 +22,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     metadata = {'render_modes': ['human', 'rgb_array'], 'render_fps': 30}
 
     def __init__(self, render_mode=None, use_gui=False,
-                 task_config_file="../configs/task_config.yaml", # Default task name
-                 base_config_file="../configs/base_config.yaml"):
+                 task_config_file="place_3_line.yaml", # Default task name
+                 base_config_file="base_config.yaml"):
         super().__init__()
         self.render_mode = render_mode
         self.use_gui = use_gui or (render_mode == 'human')
@@ -37,16 +41,20 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # --- Load Configuration ---
         self._load_and_merge_configs(base_config_file, task_config_file)
 
-        # --- Read Task Name From Loaded Config ---
-        # Store it after loading for reference or logging
-        self.task_name = self.config.get('task', {}).get('name', task_config_file)
-        print(f"Initializing environment for task: '{self.task_name}' (from {task_config_file})")
+        # --- Load and Instantiate Task using the helper method ---
+        try:
+            # Call the refactored method, passing the necessary imports
+            self._load_and_instantiate_task(tasks, BaseTask)
+        except ValueError as e:
+            print(f"FATAL: Environment initialization failed during task loading: {e}")
+            raise e
+
 
         # --- Setup Physics, Scene, Robot (using base config) ---
         self.client = -1
         self._setup_pybullet_connection() # Connect and set basic physics params
         self._load_scene_assets() # Uses self.config for paths
-        # self._load_robot_parameters() # Load params needed for loading/init
+        self._load_robot_parameters_from_config()
         self._load_robot() # Load the robot URDF
 
 
@@ -182,26 +190,41 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                        flags=p.URDF_USE_SELF_COLLISION | p.URDF_USE_INERTIA_FROM_FILE,
                                        physicsClientId=self.client)
             print(f"Loaded robot with ID: {self.robot_id} from {robot_urdf_path}")
-            self.arm_joint_names = _robot_cfg.get('panda', {}).get('arm_joint_names',
-                                                                   ["panda_joint1", "panda_joint2", "panda_joint3",
-                                                                    "panda_joint4", "panda_joint5", "panda_joint6",
-                                                                    "panda_joint7"])
-
-            self.finger_joint_names = _robot_cfg.get('panda', {}).get('finger_joint_names',["panda_finger_joint1",
-                                                                                            "panda_finger_joint2"])
-
-            self.preferred_ee_link_name =_robot_cfg.get('panda', {}).get('preferred_ee_link_name', "panda_hand")
-            self.fallback_ee_link_name_1 = _robot_cfg.get('panda', {}).get('fallback_ee_link_name_1', "panda_lin7")
-            self.fallback_ee_link_name_2 = _robot_cfg.get('panda', {}).get('fallback_ee_link_name_2', "panda_lin8")
 
         except Exception as e:
             print(f"LOAD FAILED: {e}"); self.close(); raise e
 
-    def _load_robot_parameters(self):
-        """Loads robot parameters from config and stores essential ones."""
-        # Already loaded most into self attributes in __init__ for clarity
-        # This method could potentially load less frequently accessed ones if needed
-        pass  # Most are already loaded into self attributes
+    def _load_robot_parameters_from_config(self):
+        """Loads robot parameters from config and stores essential ones on self."""
+        print("Loading robot parameters from config...")
+        _robot_cfg = self.config.get('robot', {})
+        self.robot_type = _robot_cfg.get('type', 'panda')
+        # ... (rest of robot param loading onto self attributes: joint names, link names, gains, gripper values, home pose, grasp offset etc.) ...
+        _panda_cfg = _robot_cfg.get('panda', {})
+
+        self.arm_joint_names = _panda_cfg.get('arm_joint_names', [f"panda_joint{i + 1}" for i in range(7)])
+        self.finger_joint_names = _panda_cfg.get('finger_joint_names', ["panda_finger_joint1", "panda_finger_joint2"])
+        self.preferred_ee_link_name = _panda_cfg.get('preferred_ee_link_name', "panda_hand")
+        self.fallback_ee_link_name_1 = _panda_cfg.get('fallback_ee_link_name_1', "panda_link7")
+        self.fallback_ee_link_name_2 = _panda_cfg.get('fallback_ee_link_name_2', "panda_link8")
+
+        self.arm_max_forces = _panda_cfg.get('arm_max_forces', [100.0] * 7)
+        self.arm_kp = _panda_cfg.get('arm_kp', [0.05] * 7)
+        self.arm_kd = _panda_cfg.get('arm_kd', [1.0] * 7)
+
+        self.gripper_open_value = _panda_cfg.get('gripper_open_value', 0.04)
+        self.gripper_closed_value = _panda_cfg.get('gripper_closed_value', 0.025)
+        self.gripper_max_force = _panda_cfg.get('gripper_max_force', 40)
+        self.gripper_kp = _panda_cfg.get('gripper_kp', 0.2)
+        self.gripper_kd = _panda_cfg.get('gripper_kd', 1.0)
+
+        ik_solver_cfg = _panda_cfg.get('ik_solver', "IK_DLS")
+        self.ik_solver = getattr(p, ik_solver_cfg, p.IK_DLS)  # Correct assignment
+        self.home_pose_joints = _panda_cfg.get('home_pose_joints',
+                                               [0.0, -np.pi / 4, 0.0, -3 * np.pi / 4, 0.0, np.pi / 2, np.pi / 4])
+
+        self.rest_poses_for_ik = self.home_pose_joints
+        self.grasp_offset_in_hand_frame = _panda_cfg.get('grasp_offset_in_hand_frame', [0.0, 0.0, 0.065])
 
     def _initialize_robot_info_and_state(self):
         """ Finds indices, limits, resets robot to home pose, enables motors. """
@@ -227,39 +250,21 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     raise ValueError("Could not find suitable EE Link.")
         print(f"  Using EE Link '{self.ee_link_name}' at index: {self.ee_link_index}")
 
-        _panda_cfg = self.config.get('robot', {}).get('panda', {})  # Get panda params again for gains
-
         # 2. Get Arm Limits and Gripper Limits using imported function
         self.arm_limits = get_arm_kinematic_limits_and_ranges(self.robot_id, self.arm_joint_indices, self.client)
-        self.gripper_open_value = _panda_cfg.get('gripper_open_value')
-        self.gripper_closed_value = _panda_cfg.get('gripper_closed_value')
         print(f"  Arm Limits Extracted.")
 
         # 3. Reset Arm Joints State & Enable Motors (using self.home_pose_joints etc.)
         print("  Initializing arm joints to home pose...")
-        self.arm_kp = _panda_cfg.get('arm_kp', [0.05] * 7)
-        self.arm_kd = _panda_cfg.get('arm_kd', [1.0] * 7)
-        self.arm_max_forces = _panda_cfg.get('arm_max_forces', [100.0] * 7)
-        self.home_pose_joints = _panda_cfg.get('home_pose_joints', [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854])
-        self.rest_poses_for_ik = self.home_pose_joints
-
         for i, idx in enumerate(self.arm_joint_indices):
             p.resetJointState(self.robot_id, idx, self.home_pose_joints[i], 0.0, self.client)
             p.setJointMotorControl2(self.robot_id, idx, p.POSITION_CONTROL, targetPosition=self.home_pose_joints[i],
                                     force=self.arm_max_forces[i], positionGain=self.arm_kp[i],
                                     velocityGain=self.arm_kd[i], physicsClientId=self.client)
 
-        if _panda_cfg.get('ik_solver', 'IK_DLS') == 'IK_DLS':
-            self.ik_solver = p.IK_DLS
-        else:
-            raise NotImplementedError("IK SOLVER: Only IDK_DLS is supported yet!")
+
 
         # 4. Reset Gripper State & Enable Motors (using self attributes)
-        print("  Initializing gripper to OPEN state...")
-        self.gripper_kp = _panda_cfg.get('gripper_kp', 0.2)
-        self.gripper_kd = _panda_cfg.get('gripper_kd', 1.0)
-        self.gripper_max_force = _panda_cfg.get('gripper_max_force', 50.0)
-
         if self.finger_indices:
             p.resetJointState(self.robot_id, self.finger_indices[0], self.gripper_open_value, 0.0, self.client)
             p.resetJointState(self.robot_id, self.finger_indices[1], self.gripper_open_value, 0.0, self.client)
@@ -300,6 +305,77 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.step_penalty = _task_cfg.get('step_penalty', -0.01)
         self.move_fail_penalty = _task_cfg.get('move_fail_penalty', 0.005)
 
+    def _load_and_instantiate_task(self, tasks_package, base_task_class=BaseTask):
+        """
+        Loads the task class specified in the config, validates it,
+        instantiates it, and sets related environment parameters.
+
+        Args:
+            tasks_package: The imported 'tasks' package object.
+            BaseTask: The BaseTask class for validation.
+
+        Raises:
+            ValueError: If the task cannot be loaded, validated, or instantiated.
+        """
+        if not tasks_package:
+            raise ValueError("Task loading failed: 'tasks' package is not available or failed to import.")
+
+        # --- 1. Get Task Configuration ---
+        task_config_dict = self.config.get('task', {})
+        task_class_name = task_config_dict.get('task_class_name', "BlockPlacementTask")  # Default
+
+        # Add warning only if the default was used because the key was missing
+        if task_class_name == "BlockPlacementTask" and not task_config_dict.get('task_class_name'):
+            print(f"Warning: task_class_name not found in config, defaulting to {task_class_name}")
+
+        # --- 2. Load Task Class Dynamically ---
+        task_class = None
+        # Heuristic: derive module name (e.g., BlockPlacementTask -> block_placement_task)
+        module_name = re.sub(r'(?<!^)(?=[A-Z])', '_', task_class_name).lower()
+        # Append '_task' if needed (adjust based on your file naming convention)
+        if not module_name.endswith("_task"): module_name += "_task"
+
+        print(f"DEBUG: Attempting to load class '{task_class_name}' from module '{module_name}'.")
+        try:
+            # Get the specific task *module* from the tasks *package*
+            task_module = getattr(tasks_package, module_name, None)
+            if task_module:
+                # Get the *class* from the task *module*
+                task_class = getattr(task_module, task_class_name, None)
+
+        except Exception as e:
+            # Catch potential errors during getattr calls
+            print(f"DEBUG: An error occurred during dynamic task class loading: {e}")
+            task_class = None  # Ensure class is None on error
+
+        # --- 3. Validate and Instantiate ---
+        if task_class and issubclass(task_class, base_task_class):
+            print(f"DEBUG: Successfully retrieved and validated class: {task_class}")
+            try:
+                # Instantiate the task, passing the env instance and task-specific config
+                self.task = task_class(self, task_config_dict)  # Pass the whole task dict
+                print(f"Instantiated Task Object: {self.task.__class__.__name__}")
+
+                # --- 4. Set Environment Parameters from Task ---
+                # These are determined *by the task* based on its config
+                self.num_blocks = self.task.num_blocks
+                self.num_locations = getattr(self.task, 'num_locations', self.num_blocks)
+                self.num_dump_locations = getattr(self.task, 'num_dump_locations', 1)
+                print(
+                    f"DEBUG: Task parameters set: num_blocks={self.num_blocks}, num_locations={self.num_locations}")
+
+            except Exception as e:
+                # Catch errors during task __init__ or accessing its attributes
+                raise ValueError(f"Failed to instantiate task '{task_class_name}' or access its parameters: {e}")
+
+        else:
+            # Construct error message for loading/validation failure
+            error_msg = f"Could not find or validate task class '{task_class_name}'. "
+            if not task_class:
+                error_msg += f"Class not found (checked module '{module_name}' in 'tasks'). Check name and tasks/__init__.py. "
+            elif not issubclass(task_class, base_task_class):
+                error_msg += f"Class found but does not inherit from {base_task_class}. Check {base_task_class} import consistency. "
+            raise ValueError(error_msg)
 
 
         print("Task parameters loaded/updated.")
@@ -368,16 +444,18 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # ==================================================================
     # --- Reset ---
     # ==================================================================
+        # Inside PhysicsBlockRearrangementEnv class in block_rearrangement_env.py
+
+        # Inside PhysicsBlockRearrangementEnv class in block_rearrangement_env.py
+
     def reset(self, seed=None, options=None):
         """
         Resets the environment to a new initial state.
 
-        - Removes old objects.
+        - Removes old objects and constraints.
         - Resets robot to home pose with gripper open.
-        - Randomly selects a target layout pattern.
-        - Defines target locations based on the pattern.
-        - Places target visuals (plates).
-        - Randomly places blocks in the spawn area, avoiding targets/dump.
+        - Calls the task's reset_task_scenario() method to set up the specific task
+          (define targets, goals, spawn blocks/visuals).
         - Lets the simulation settle.
         - Returns the initial observation and info dict.
         """
@@ -385,163 +463,79 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.current_steps = 0
         self.held_object_id = None
         self.held_object_idx = None
+        self.goal_config = {}  # Reset goal config
 
-        # --- Cleanup from previous episode ---
-        # Remove constraint first if it exists
+        # --- 1. Cleanup from previous episode ---
         if self.grasp_constraint_id is not None:
             try:
                 p.removeConstraint(self.grasp_constraint_id, physicsClientId=self.client)
-                # print(f"Reset: Removed constraint {self.grasp_constraint_id}") # Optional debug
-            except Exception as e:
-                # print(f"Warning: Tried to remove constraint {self.grasp_constraint_id} but failed: {e}")
-                pass  # Ignore if removal fails (might already be gone)
-            self.grasp_constraint_id = None  # Ensure it's None after attempt
+            except Exception:
+                pass  # Ignore if removal fails
+            self.grasp_constraint_id = None
 
-        # Remove old blocks
-        for block_id in self.block_ids:
-            try:
-                p.removeBody(block_id, physicsClientId=self.client)
-            except Exception:
-                pass
-        # Remove old target visuals
-        for target_id in self.target_ids:
-            try:
-                p.removeBody(target_id, physicsClientId=self.client)
-            except Exception:
-                pass
+        # Remove old blocks and targets
+        for body_id_list in [self.block_ids, self.target_ids]:
+            for body_id in body_id_list:
+                try:
+                    p.removeBody(body_id, physicsClientId=self.client)
+                except Exception:
+                    pass
         self.block_ids = []
         self.target_ids = []
         # ------------------------------------
 
-        # --- Reset Robot Pose to Home ---
+        # --- 2. Reset Robot Pose to Home ---
         print("Resetting robot to home pose...")
-        for i, idx in enumerate(self.arm_joint_indices):
-            # Set motor target to home pose (should already be there from init, but ensures consistency)
-            p.setJointMotorControl2(self.robot_id, idx, p.POSITION_CONTROL,
-                                    targetPosition=self.home_pose_joints[i],
-                                    force=self.arm_max_forces[i],
-                                    positionGain=self.arm_kp[i], velocityGain=self.arm_kd[i],
-                                    physicsClientId=self.client)
-        # Ensure gripper is open using the helper function
-        self._set_gripper_state("open", wait=False)
-        wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)
+        if hasattr(self, 'arm_joint_indices') and self.arm_joint_indices:  # Check if initialized
+            for i, idx in enumerate(self.arm_joint_indices):
+                p.resetJointState(self.robot_id, idx, self.home_pose_joints[i], 0.0, self.client)
+                # Re-apply motor control to hold pose
+                p.setJointMotorControl2(self.robot_id, idx, p.POSITION_CONTROL,
+                                        targetPosition=self.home_pose_joints[i],
+                                        force=self.arm_max_forces[i],
+                                        positionGain=self.arm_kp[i], velocityGain=self.arm_kd[i],
+                                        physicsClientId=self.client)
+            # Ensure gripper is open
+            self._set_gripper_state("open", wait=False)
+            wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)  # Short wait for stability
+        else:
+            print("Warning: Robot arm/gripper indices not available during reset. Skipping pose reset.")
         # --------------------------------
 
-        # --- Define Target and Dump Locations for this Episode ---
-        # Select a random pattern for the targets
-        selected_pattern = self.np_random.choice(self.target_pattern_options)
-        # Define target locations based on pattern
-        self.target_locations_pos = self._define_locations(
-            num_locs=self.num_locations,
-            is_target=True,
-            pattern_type=selected_pattern
-            # Optional: Pass target_area_bounds if needed for 'random_scatter'
-            # target_area_bounds=[...]
-        )
-        # Define the fixed dump location(s)
-        # Assuming self._dump_location_base_pos was set in __init__
-        self.dump_location_pos = self._define_locations(
-            num_locs=self.num_dump_locations,
-            is_target=False
-        )[0]  # Get the first (likely only) dump location position
+        # --- 3. Delegate Task-Specific Setup ---
+        if self.task is None:
+            raise RuntimeError("Task object (self.task) not initialized before reset. Check __init__.")
 
-        print(f"  Generated target pattern: {selected_pattern}")
-        print(f"  Target Locations (base Z): {np.round(self.target_locations_pos, 2)}")
-        print(f"  Dump Location (base Z): {np.round(self.dump_location_pos, 2)}")
-        # ---------------------------------------------------------
+        print("Calling task reset_task_scenario...")
+        task_info = None  # Initialize task_info
+        try:
+            # The task will define targets, goals, and trigger spawning
+            task_info = self.task.reset_task_scenario()  # Store the result
+            print("Task scenario reset complete.")
+        except Exception as e:
+            print(f"FATAL: Error during task reset_task_scenario: {e}")
+            import traceback
+            traceback.print_exc()
+            self.close()
+            raise RuntimeError(f"Failed to reset task scenario: {e}")
+        # -----------------------------------------
 
-        # --- Place Target Visuals (Plates) ---
-        self.goal_config = {}  # Stores { target_loc_idx: required_block_idx }
-        # Generate target indices and shuffle them to randomize which location gets which color/block index
-        target_loc_indices = list(range(self.num_locations))
-        self.np_random.shuffle(target_loc_indices)  # Use seeded random generator
-
-        for i in range(self.num_locations):
-            # Check if enough locations were generated (e.g., random scatter might fail)
-            if i >= len(self.target_locations_pos):
-                print(
-                    f"Warning: Not enough target locations generated ({len(self.target_locations_pos)}) for goal assignment {i}.")
-                break
-
-            loc_idx = target_loc_indices[i]  # Get the shuffled location index
-            target_pos = self.target_locations_pos[loc_idx]  # Get the actual [x,y,z] coords for this location index
-            target_color_idx = i % len(self.target_colors_rgba)  # Color index cycles through available colors
-            target_color_rgba = self.target_colors_rgba[target_color_idx]
-
-            # Assign Goal: The block with index `i` needs to go to the location at index `loc_idx`
-            self.goal_config[loc_idx] = i
-
-            # Create visual plate for the target
-            plate_half_extents = [0.04, 0.04,
-                                  0.0005]  # Make plate slightly smaller than block base? Plate thickness 1mm.
-            # Calculate center Z so plate bottom is slightly above table surface
-            plate_center_z = self.table_height + plate_half_extents[2] + 0.0001  # Tiny clearance above table
-
-            try:
-                vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=plate_half_extents, rgbaColor=target_color_rgba,
-                                             physicsClientId=self.client)
-                coll_id = -1  # No collision for target plate visuals
-                plate_id = p.createMultiBody(
-                    baseMass=0,  # Static object
-                    baseCollisionShapeIndex=coll_id,
-                    baseVisualShapeIndex=vis_id,
-                    basePosition=[target_pos[0], target_pos[1], plate_center_z],  # Use target X/Y, calculated Z
-                    baseOrientation=[0, 0, 0, 1],  # Flat orientation
-                    physicsClientId=self.client
-                )
-                if plate_id < 0:  # Check if body creation failed
-                    print(f"Warning: Failed to create target plate visual {i} at location index {loc_idx}")
-                else:
-                    self.target_ids.append(plate_id)  # Store ID only if successful
-            except Exception as e:
-                print(f"Error creating target plate visual {i}: {e}")
-        # -----------------------------------
-
-        # --- Place Dynamic Blocks Randomly ---
-        # Needs self.target_locations_pos and self.dump_location_pos for collision avoidance
-        available_spawn_locations = self._get_valid_spawn_positions(self.num_blocks)
-        if len(available_spawn_locations) < self.num_blocks:
-            # This could happen if spawn area is too small or cluttered
-            raise RuntimeError(
-                f"Not enough valid spawn locations ({len(available_spawn_locations)}) for {self.num_blocks} blocks.")
-
-        for i in range(self.num_blocks):
-            spawn_pos_xy = available_spawn_locations[i]
-            # Place block base slightly above table surface
-            spawn_z = self.table_height + self.block_half_extents[2] + 0.001
-            block_start_pos = [spawn_pos_xy[0], spawn_pos_xy[1], spawn_z]
-            # Random initial Z rotation
-            block_start_orientation = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
-
-            try:
-                # Use scaling with cube.urdf (ensure cube.urdf is unit size)
-                block_id = p.loadURDF("cube.urdf", block_start_pos, block_start_orientation,
-                                      globalScaling=self.block_scale,  # Apply scaling here
-                                      physicsClientId=self.client)
-
-                if block_id < 0: raise Exception("p.loadURDF failed for block")
-
-                block_color_rgba = self.block_colors_rgba[i]
-                p.changeVisualShape(block_id, -1, rgbaColor=block_color_rgba, physicsClientId=self.client)
-                # Set dynamics: mass, friction
-                p.changeDynamics(block_id, -1, mass=0.1, lateralFriction=0.6, physicsClientId=self.client)
-                self.block_ids.append(block_id)
-            except Exception as e:
-                print(f"Error loading block {i}: {e}")
-                # Decide how to handle: raise error, skip block?
-                raise e  # Raise error for now
-        # ------------------------------------
-
-        # --- Settle Simulation ---
-        print("Waiting for objects to settle...")
+        # --- 4. Settle Simulation ---
+        print("Waiting for objects to settle after task reset...")
         wait_steps(150, self.client, timestep=self.timestep, use_gui=self.use_gui)
         # -------------------------
 
-        # --- Get Initial Observation and Info ---
+        # --- 5. Get Initial Observation and Info ---
         observation = self._get_obs()
+        # Get base info, then merge task-specific info if provided
         info = self._get_info()
-        print("Reset finished.")
+        if isinstance(task_info, dict):
+            info.update(task_info)  # Add info returned by the task
+
+        print("Environment reset finished.")
+        # --- ADD THIS LINE ---
         return observation, info
+            # ---------------------
 
     # ==================================================================
     # --- Core Step and Primitive Execution ---
@@ -917,7 +911,88 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     # ==================================================================
     # --- Environment Specific Methods (Observation, Goal Check etc.) ---
-    # ==================================================================
+    # ==================================================================#
+
+    def _place_target_visuals(self):
+        """Places visual markers (plates) at the target locations."""
+        self.target_ids = []  # Clear previous visuals
+        if not hasattr(self, 'target_locations_pos') or not self.target_locations_pos:
+            print("Warning: Target locations not defined, cannot place visuals.")
+            return
+        if not hasattr(self, 'goal_config') or not self.goal_config:
+            print("Warning: Goal config not defined, cannot color visuals correctly.")
+            # Decide on fallback behavior? e.g., use sequential colors?
+            # return # Or proceed with default colors
+
+        print(f"Placing {len(self.target_locations_pos)} target visuals...")
+
+        # We need to map target_location_index back to the original block_index
+        # to get the correct color based on the goal config.
+        # Create inverse mapping: required_block_idx -> target_loc_idx
+        block_to_target_map = {v: k for k, v in self.goal_config.items()}
+
+        plate_half_extents = [0.04, 0.04, 0.0005]  # Thin plate
+        plate_center_z = self.table_height + plate_half_extents[2] + 0.0001
+
+        for i in range(len(self.target_locations_pos)):  # Iterate through defined location positions
+            target_pos = self.target_locations_pos[i]  # Get the [x,y,z] for this location index 'i'
+
+            # Find which original block index is assigned to this location index 'i'
+            assigned_block_idx = -1
+            for block_idx, loc_idx in self.goal_config.items():
+                if loc_idx == i:
+                    assigned_block_idx = block_idx
+                    break
+
+            if assigned_block_idx != -1:
+                target_color_rgba = self.target_colors_rgba[assigned_block_idx % len(self.target_colors_rgba)]
+                try:
+                    vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=plate_half_extents,
+                                                 rgbaColor=target_color_rgba, physicsClientId=self.client)
+                    plate_id = p.createMultiBody(
+                        baseMass=0, baseCollisionShapeIndex=-1, baseVisualShapeIndex=vis_id,
+                        basePosition=[target_pos[0], target_pos[1], plate_center_z],
+                        baseOrientation=[0, 0, 0, 1], physicsClientId=self.client
+                    )
+                    if plate_id >= 0:
+                        self.target_ids.append(plate_id)
+                    else:
+                        print(f"Warning: Failed to create target plate visual for loc idx {i}")
+                except Exception as e:
+                    print(f"Error creating target plate visual for loc idx {i}: {e}")
+            else:
+                print(f"Warning: No block assigned to target location index {i} in goal_config. Skipping visual.")
+
+    def _spawn_blocks(self, num_blocks_to_spawn):
+        """Spawns the required number of blocks in valid random positions."""
+        self.block_ids = []  # Clear previous blocks
+        print(f"Spawning {num_blocks_to_spawn} blocks...")
+        if not hasattr(self, 'spawn_area_bounds'):
+            self.spawn_area_bounds = self._define_spawn_area()  # Define if not already defined
+
+        available_spawn_locations = self._get_valid_spawn_positions(num_blocks_to_spawn)
+        if len(available_spawn_locations) < num_blocks_to_spawn:
+            raise RuntimeError(
+                f"Not enough valid spawn locations ({len(available_spawn_locations)}) for {num_blocks_to_spawn} blocks.")
+
+        for i in range(num_blocks_to_spawn):
+            spawn_pos_xy = available_spawn_locations[i]
+            spawn_z = self.table_height + self.block_half_extents[2] + 0.001
+            block_start_pos = [spawn_pos_xy[0], spawn_pos_xy[1], spawn_z]
+            block_start_orientation = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
+
+            try:
+                block_id = p.loadURDF("cube.urdf", block_start_pos, block_start_orientation,
+                                      globalScaling=self.block_scale, physicsClientId=self.client)
+                if block_id < 0: raise Exception("p.loadURDF failed for block")
+
+                block_color_rgba = self.block_colors_rgba[i % len(self.block_colors_rgba)]
+                p.changeVisualShape(block_id, -1, rgbaColor=block_color_rgba, physicsClientId=self.client)
+                p.changeDynamics(block_id, -1, mass=0.1, lateralFriction=0.6, physicsClientId=self.client)
+                self.block_ids.append(block_id)
+            except Exception as e:
+                print(f"Error loading block {i}: {e}")
+                raise e
 
     def _define_locations(self, num_locs, is_target, pattern_type='line_y', target_area_bounds=None):
         """
@@ -1008,10 +1083,25 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         max_y = -0.05 # Spawn on left side
         return [min_x, max_x, min_y, max_y]
 
+    # Inside PhysicsBlockRearrangementEnv class
+
     def _get_valid_spawn_positions(self, num_required):
+        """Generates valid spawn positions avoiding targets and dump locations."""
         valid_positions = []
-        min_dist_sq = (self.block_scale * 1.2)**2 # Check distance
-        target_dump_poses_xy = [[loc[0], loc[1]] for loc in self.target_locations_pos] + [[self.dump_location_pos[0], self.dump_location_pos[1]]]
+        min_dist_sq = (self.block_scale * 1.2) ** 2  # Min dist between spawned blocks
+
+        target_dump_poses_xy = [[loc[0], loc[1]] for loc in self.target_locations_pos]
+        # Only add dump location if it exists and is not empty
+        if hasattr(self, 'dump_location_pos') and self.dump_location_pos:
+            # Check if dump_location_pos is a list of lists (multiple dumps) or just one list
+            if isinstance(self.dump_location_pos[0], list):  # Multiple dump locs
+                dump_poses_xy = [[loc[0], loc[1]] for loc in self.dump_location_pos]
+                target_dump_poses_xy.extend(dump_poses_xy)
+            elif len(self.dump_location_pos) >= 2:  # Single dump loc [x, y, z]
+                target_dump_poses_xy.append([self.dump_location_pos[0], self.dump_location_pos[1]])
+            else:
+                print("Warning: dump_location_pos format unexpected, skipping dump location check.")
+
         attempts = 0
         max_attempts = num_required * 100
 
@@ -1020,12 +1110,22 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             x = self.np_random.uniform(self.spawn_area_bounds[0], self.spawn_area_bounds[1])
             y = self.np_random.uniform(self.spawn_area_bounds[2], self.spawn_area_bounds[3])
             candidate_pos = [x, y]
-            too_close_to_spawn = any(((pos[0]-x)**2 + (pos[1]-y)**2 < min_dist_sq) for pos in valid_positions)
+
+            # Check distance to other blocks spawned in this reset
+            too_close_to_spawn = any(((pos[0] - x) ** 2 + (pos[1] - y) ** 2 < min_dist_sq) for pos in valid_positions)
             if too_close_to_spawn: continue
-            too_close_to_target = any(((target_pos[0]-x)**2 + (target_pos[1]-y)**2 < (self.block_scale*1.5)**2) for target_pos in target_dump_poses_xy)
-            if too_close_to_target: continue
+
+            # Check distance to targets and dump locations
+            too_close_to_target_or_dump = any(
+                ((target_pos[0] - x) ** 2 + (target_pos[1] - y) ** 2 < (self.block_scale * 1.5) ** 2) for target_pos in
+                target_dump_poses_xy)
+            if too_close_to_target_or_dump: continue
+
+            # If all checks pass, add the position
             valid_positions.append(candidate_pos)
-        if len(valid_positions) < num_required: print(f"Warning: Only found {len(valid_positions)}/{num_required} valid spawn locations.")
+
+        if len(valid_positions) < num_required:
+            print(f"Warning: Only found {len(valid_positions)}/{num_required} valid spawn locations.")
         return valid_positions
 
     def _get_obs(self):

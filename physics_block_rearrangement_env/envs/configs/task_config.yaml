@@ -1,6 +1,6 @@
 # Task: Rearrange 3 blocks into a circle pattern, dump needed
 task:
-  name: "Place 2 Blocks in Line"
+  name: "PlaceNLineTask"
   num_blocks: 3
   num_locations: 3
   num_dump_locations: 1

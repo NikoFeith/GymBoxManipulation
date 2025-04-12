@@ -1,0 +1,10 @@
+# configs/tasks/place_3_line.yaml
+task:
+  name: "Place 3 Blocks in Line"
+  task_class_name: "BlockPlacementTask" # Specify which class handles this
+  num_blocks: 3
+  num_dump_locations: 0 # No dump needed
+  target_pattern: 'line_y'
+  # target_spacing: 0.15 # Optional: override default spacing
+  # line_x_offset: 0.20 # Optional: override default offset
+  max_episode_steps: 100
