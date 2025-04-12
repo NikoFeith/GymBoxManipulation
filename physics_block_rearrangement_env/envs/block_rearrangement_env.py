@@ -15,7 +15,7 @@ from physics_block_rearrangement_env.utils.logging_utils import *
 from physics_block_rearrangement_env.envs.task_interface import BaseTask
 from physics_block_rearrangement_env.envs import tasks
 
-log_level = logging.WARNING # Or logging.DEBUG
+log_level = logging.ERROR # Or logging.DEBUG
 logger = setup_logger(__name__, level=log_level)
 
 
@@ -350,7 +350,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         except Exception as e:
             # Catch potential errors during getattr calls
-            logger.error(f" An error occurred during dynamic task class loading: {e}")
+            logger.exception(f" An error occurred during dynamic task class loading: {e}")
             task_class = None  # Ensure class is None on error
 
         # --- 3. Validate and Instantiate ---
@@ -588,7 +588,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     logging.debug(
                         f"  Block {block_idx_to_pick} Pose: Pos={np.round(block_pos, 3)}, Euler={np.round(block_euler, 2)}")
                 except Exception as e:
-                    logging.warning( f"  Failure: Cannot get pose for block {block_id}. {e}")
+                    logging.exception( f"  Failure: Cannot get pose for block {block_id}. {e}")
                     return False
 
                 # --- Calculate Target Orientation based on Block Yaw ---
@@ -674,7 +674,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     if self.grasp_constraint_id < 0: raise Exception("createConstraint failed")
                     logging.debug(f"  Constraint created: {self.grasp_constraint_id}")
                 except Exception as e:
-                    logging.error(f"  Failure: Error creating constraint: {e}")
+                    logging.exception(f"  Failure: Error creating constraint: {e}")
                     self._set_gripper_state("open", wait=False)
                     return False
                 wait_steps(60, self.client, timestep=self.timestep, use_gui=self.use_gui)
@@ -746,7 +746,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     try:
                         p.removeConstraint(self.grasp_constraint_id, physicsClientId=self.client)
                     except Exception as e:
-                        logging.debug(f"  Warning: Failed removing constraint {self.grasp_constraint_id}: {e}")
+                        logging.exception(f"  Warning: Failed removing constraint {self.grasp_constraint_id}: {e}")
                     self.grasp_constraint_id = None
 
 
@@ -767,7 +767,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 return False
 
         except Exception as e:  # Catch any unexpected errors in primitive execution
-            logging.error(f"!! Error during primitive execution for action {action_index}: {type(e).__name__} - {e}")
+            logging.exception(f"!! Error during primitive execution for action {action_index}: {type(e).__name__} - {e}")
             import traceback
             traceback.print_exc()
             if self.grasp_constraint_id is not None:
@@ -831,7 +831,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 wait_steps(self.gripper_wait_steps, self.client, timestep=self.timestep, use_gui=self.use_gui)
             return True  # Command sent successfully
         except Exception as e:
-            logging.error(f"Error during setJointMotorControlArray for gripper: {e}")
+            logging.exception(f"Error during setJointMotorControlArray for gripper: {e}")
             return False
 
 
@@ -888,7 +888,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 return pos_ok and ori_ok
 
             except Exception as e:
-                logging.debug(f"        Error checking final pose: {e}") # Added indent
+                logging.exception(f" Error checking final pose: {e}") # Added indent
                 return False
         else:
             logging.warning(f"  ----> IK Failed! (Took {ik_time:.4f} s)")
@@ -902,7 +902,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                         physicsClientId=self.client)
             return link_state[4], link_state[5]  # world pos, world orn
         except Exception as e:
-            logging.error(f"Error getting EE pose: {e}")
+            logging.exception(f"Error getting EE pose: {e}")
             return None, None
 
     # ==================================================================
@@ -955,7 +955,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     else:
                         logging.warning(f"Warning: Failed to create target plate visual for loc idx {i}")
                 except Exception as e:
-                    logging.error(f"Error creating target plate visual for loc idx {i}: {e}")
+                    logging.exception(f"Error creating target plate visual for loc idx {i}: {e}")
             else:
                 logging.warning(f"Warning: No block assigned to target location index {i} in goal_config. Skipping visual.")
 
@@ -987,7 +987,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 p.changeDynamics(block_id, -1, mass=0.1, lateralFriction=0.6, physicsClientId=self.client)
                 self.block_ids.append(block_id)
             except Exception as e:
-                logging.error(f"Error loading block {i}: {e}")
+                logging.exception(f"Error loading block {i}: {e}")
                 raise e
 
     # Inside PhysicsBlockRearrangementEnv class
@@ -1043,7 +1043,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             rgb_array = np.array(px, dtype=np.uint8)[:, :, :3]
             return rgb_array
         except Exception as e:
-             logging.error(f"Error getting camera image: {e}. Returning blank image.")
+             logging.exception(f"Error getting camera image: {e}. Returning blank image.")
              return np.zeros((self.image_size, self.image_size, 3), dtype=np.uint8)
 
     def _get_info(self):
@@ -1064,7 +1064,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     on_surface = abs(current_pos[2] - (self.table_height + self.block_half_extents[2])) < 0.02
                     if dist_xy < goal_dist_threshold and on_surface:
                         on_target_count += 1
-                except Exception: return False
+                except Exception:
+                    return False
         return on_target_count == len(self.goal_config)
 
     def render(self, mode='human'):
@@ -1080,7 +1081,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             try:
                 if p.isConnected(physicsClientId=self.client):
                      p.disconnect(physicsClientId=self.client)
-            except Exception as e: logging.error(f"Error disconnecting PyBullet: {e}")
+            except Exception as e: logging.exception(f"Error disconnecting PyBullet: {e}")
             self.client = -1
 
 

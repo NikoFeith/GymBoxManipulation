@@ -3,6 +3,11 @@ import numpy as np
 import pybullet as p
 import math
 from ..task_interface import BaseTask
+from physics_block_rearrangement_env.utils.logging_utils import *
+
+log_level = logging.ERROR # Or logging.DEBUG
+logger = setup_logger(__name__, level=log_level)
+
 
 
 class BlockPlacementTask(BaseTask):
@@ -27,7 +32,7 @@ class BlockPlacementTask(BaseTask):
         self.num_locations = self.num_blocks
         self.num_dump_locations = self.config.get("num_dump_locations", 1)
 
-        print(f"  BlockPlacementTask: Loaded params - num_blocks={self.num_blocks}, pattern='{self.target_pattern}'")
+        logger.info(f"  BlockPlacementTask: Loaded params - num_blocks={self.num_blocks}, pattern='{self.target_pattern}'")
 
     def define_spawn_area(self) -> list[float]:
         """Defines the block spawn area based on task config."""
@@ -42,7 +47,7 @@ class BlockPlacementTask(BaseTask):
         max_y = table_center_y + self.spawn_bounds_relative[3]
 
         spawn_bounds = [min_x, max_x, min_y, max_y]
-        print(f"  Task defined spawn area: {np.round(spawn_bounds, 2)}")
+        logger.info(f"  Task defined spawn area: {np.round(spawn_bounds, 2)}")
         return spawn_bounds
 
     def reset_task_scenario(self):
@@ -56,7 +61,7 @@ class BlockPlacementTask(BaseTask):
         z_pos = env.table_height # Base Z is table height
         min_target_dist_sq = (env.block_scale * 2.0)**2 # Use env's block_scale
 
-        print(f"  Defining {self.num_locations} target locations with pattern: {self.target_pattern}")
+        logger.info(f"  Defining {self.num_locations} target locations with pattern: {self.target_pattern}")
 
         if self.target_pattern == 'line_y':
             line_x = center_x + self.line_x_offset
@@ -79,7 +84,7 @@ class BlockPlacementTask(BaseTask):
                  center_x + self.target_scatter_bounds[0], center_x + self.target_scatter_bounds[1],
                  center_y + self.target_scatter_bounds[2], center_y + self.target_scatter_bounds[3]
              ]
-             print(f"    Scattering targets within: {np.round(bounds, 2)}")
+             logger.info(f"    Scattering targets within: {np.round(bounds, 2)}")
              attempts = 0; max_attempts = self.num_locations * 50
              while len(target_locs) < self.num_locations and attempts < max_attempts:
                 attempts += 1
@@ -89,7 +94,7 @@ class BlockPlacementTask(BaseTask):
                 if not too_close: target_locs.append([x, y, z_pos])
              if len(target_locs) < self.num_locations: print(f"Warning: Only placed {len(target_locs)}/{self.num_locations} random targets.")
         else: # Fallback or error for unknown pattern
-            print(f"Warning: Unknown target pattern '{self.target_pattern}'. Using default line_y.")
+            logger.warning(f"Warning: Unknown target pattern '{self.target_pattern}'. Using default line_y.")
             target_spacing = 0.15; line_x = center_x + 0.20
             y_start = center_y - target_spacing * (self.num_locations - 1) / 2.0
             for i in range(self.num_locations): target_locs.append([line_x, y_start + i * target_spacing, z_pos])
@@ -118,7 +123,7 @@ class BlockPlacementTask(BaseTask):
         env._place_target_visuals()
         env._spawn_blocks(self.num_blocks) # This now uses env.spawn_area_bounds set in env.__init__
 
-        print(f"  Task Scenario Reset: {self.config.get('name', 'BlockPlacementTask')} - {self.num_blocks} blocks, pattern '{self.target_pattern}'.")
+        logger.info(f"  Task Scenario Reset: {self.config.get('name', 'BlockPlacementTask')} - {self.num_blocks} blocks, pattern '{self.target_pattern}'.")
         return {"task_type": "BlockPlacement", "pattern": self.target_pattern}
 
     def check_goal(self) -> bool:
