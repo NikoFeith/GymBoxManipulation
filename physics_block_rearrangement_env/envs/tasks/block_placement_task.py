@@ -110,7 +110,7 @@ class BlockPlacementTask(BaseTask):
             except Exception: return False
         return on_target_count == len(env.goal_config)
 
-    def _generate_goal_config(self, mapping_type: str = "ordered") -> dict:
+    def _generate_goal_config(self, mapping_type: str = "random") -> dict:
         """
         Generate a mapping from block indices to target indices.
 
@@ -131,4 +131,4 @@ class BlockPlacementTask(BaseTask):
         else:  # fallback to ordered
             target_indices = block_indices
 
-        return {b: t for b, t in zip(block_indices, target_indices)}
+        return {t: b for b, t in zip(block_indices, target_indices)}

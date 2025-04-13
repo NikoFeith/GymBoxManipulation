@@ -467,20 +467,21 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             logger.warning("Warning: Target locations not defined, cannot place visuals.")
             return
 
+        if not hasattr(self, 'goal_config') or not self.goal_config:
+            logger.warning("Warning: Goal config not defined, cannot place visuals.")
+            self.close()
+            return
+
         logger.debug(f"Placing {len(self.target_locations_pos)} target visuals...")
 
         logger.debug(f"Goal Config for this episode: {self.goal_config}")
-
-        block_to_target_map = {}
-        if hasattr(self, 'goal_config') and self.goal_config:
-            block_to_target_map = {v: k for k, v in self.goal_config.items()}
 
         plate_half_extents = [0.04, 0.04, 0.0005]
         plate_center_z = self.table_height + plate_half_extents[2] + 0.0001
 
         for i, target_pos in enumerate(self.target_locations_pos):
             # Default to gray if no color can be assigned
-            assigned_block_idx = block_to_target_map.get(i, -1)
+            assigned_block_idx = self.goal_config.get(i, -1)
             if assigned_block_idx != -1:
                 rgba = self.target_colors_rgba[assigned_block_idx % len(self.target_colors_rgba)]
             else:
