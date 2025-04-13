@@ -77,8 +77,6 @@ class BlockPlacementTask(BaseTask):
             for i in range(env.num_dump_locations)
         ]
 
-        print("Dump locations:", env.dump_location_pos)
-
         # --- 3. Define goal configuration ---
         mapping_type = env.config.get("mapping_type", "random")
         env.goal_config = self._generate_goal_config(mapping_type)
