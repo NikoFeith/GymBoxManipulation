@@ -356,7 +356,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # Pull some task-defined values into env
         self.num_blocks = self.task.num_blocks
-        self.num_locations = getattr(self.task, "num_locations", self.num_blocks)
+        self.num_targets = getattr(self.task, "num_targets", self.num_blocks)
         self.num_dump_locations = getattr(self.task, "num_dump_locations", 1)
 
     def _load_task_settings(self):
@@ -572,7 +572,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # region RL INTERFACE SETUP
     def _setup_action_space(self):
         """Defines the discrete action space for pick/place/dump actions."""
-        self.num_actions = self.num_blocks + self.num_locations + self.num_dump_locations
+        self.num_actions = self.num_blocks + self.num_targets + self.num_dump_locations
         self.action_space = spaces.Discrete(self.num_actions)
         logger.info(f"Action space = Discrete({self.num_actions})")
 
@@ -770,7 +770,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self.last_failure_reason = "place_nothing_held"
             return False
 
-        is_dump = action_index >= self.num_blocks + self.num_locations
+        is_dump = action_index >= self.num_blocks + self.num_targets
         if is_dump:
             loc_type = "dump"
             loc_idx = 0

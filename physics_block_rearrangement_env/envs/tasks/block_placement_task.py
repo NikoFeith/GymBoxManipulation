@@ -19,16 +19,12 @@ class BlockPlacementTask(BaseTask):
     def _load_task_params(self):
         """Load parameters for the placement task."""
         self.num_blocks = self.config.get("num_blocks", 2)
-        self.target_spacing = self.config.get("target_spacing", 0.15)
-        self.line_x_offset = self.config.get("line_x_offset", 0.20)
-        self.circle_radius = self.config.get("circle_radius", 0.18)
-        self.circle_center_offset = self.config.get("circle_center_offset", [0.15, 0.0])
-        self.target_scatter_bounds = self.config.get("target_scatter_bounds", [0.05, 0.25, -0.2, 0.2])
+        self.num_targets = self.config.get("num_targets", 2)
+        self.num_locations = self.num_blocks
         self.goal_dist_threshold = self.config.get("goal_dist_threshold", 0.04)
-
         self.spawn_bounds_relative = self.config.get("spawn_bounds_relative", [0.0, 0.25, -0.20, -0.05]) # [minX, maxX, minY, maxY] relative to table center
 
-        self.num_locations = self.num_blocks
+
         self.num_dump_locations = self.config.get("num_dump_locations", 1)
 
     def define_spawn_area(self) -> list[float]:
@@ -47,6 +43,41 @@ class BlockPlacementTask(BaseTask):
         logger.info(f"  Task defined spawn area: {np.round(spawn_bounds, 2)}")
         return spawn_bounds
 
+    def _generate_non_overlapping_dump_positions(self, num_dumps=3) -> list:
+        target_positions = self.env.target_locations_pos
+        spawn_bounds = self.define_spawn_area()
+        min_x, max_x, min_y, max_y = spawn_bounds
+
+        dump_candidates = [
+            [min_x, min_y],  # bottom-left
+            [max_x, min_y],  # bottom-right
+            [min_x, max_y],  # top-left
+            [max_x, max_y],  # top-right
+            [0.0, 0.0],  # table center as backup
+        ]
+
+        final_dumps = []
+        dump_z = self.env.table_height + 0.005
+        min_dist = 0.1  # minimum distance from target to consider it "clear"
+
+        for pos in dump_candidates:
+            pos_3d = [pos[0], pos[1], dump_z]
+            too_close = any(
+                np.linalg.norm(np.array(pos[:2]) - np.array(t[:2])) < min_dist
+                for t in target_positions
+            )
+            if not too_close:
+                final_dumps.append(pos_3d)
+            if len(final_dumps) >= num_dumps:
+                break
+
+        # Fallback: if not enough space found, fill remaining with default offset positions
+        while len(final_dumps) < num_dumps:
+            offset = len(final_dumps) * 0.1
+            final_dumps.append([0.0 + offset, 0.0 + offset, dump_z])
+
+        return final_dumps
+
     def reset_task_scenario(self):
         """
         Sets up the task scenario:
@@ -63,19 +94,7 @@ class BlockPlacementTask(BaseTask):
         env.target_locations_pos = env._generate_target_positions(layout)
 
         # --- 2. Define dump positions ---
-        dump_base = env.config.get("task", {}).get("dump_base_pos", [0.05, 0.0])
-        if len(dump_base) < 2:
-            dump_base = [0.05, 0.0]
-
-        # Compute Z position: flush with table top, add small offset for clearance
-        base = np.array(env.table_start_pos[:2])
-        dump_z = env.table_height + 0.005
-
-        # Create multiple dump positions along vertical axis
-        env.dump_location_pos = [
-            [base[0] + dump_base[0], base[1] + dump_base[1] - i * 0.08, dump_z]
-            for i in range(env.num_dump_locations)
-        ]
+        env.dump_location_pos = self._generate_non_overlapping_dump_positions(num_dumps=env.num_dump_locations)
 
         # --- 3. Define goal configuration ---
         mapping_type = env.config.get("mapping_type", "random")

@@ -9,6 +9,5 @@ task:
   target_layout: 'circle'
   target_circle_radius: 0.15
   target_offset: [0.0, 0.1]
-  spawn_bounds_relative: [-0.2, 0.2, -0.3, 0.35]
-  dump_base_pos: [0.0, -0.25]
+  spawn_bounds_relative: [-0.2, 0.2, -0.2, 0.2]
   max_episode_steps: 100
