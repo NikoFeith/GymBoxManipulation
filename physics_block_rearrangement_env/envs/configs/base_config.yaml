@@ -14,9 +14,9 @@ simulation:
   max_episode_steps: 100
   pose_reached_threshold: 0.02
   orientation_reached_threshold: 0.1
-  z_hover_offset: 0.15
-  grasp_clearance_above_top: 0.05
-  place_clearance_above_top: 0.09
+  z_hover_offset: 0.25
+  grasp_clearance_above_top: 0.11
+  place_clearance_above_top: 0.15
 
 # Default Rewards (can be overridden by task)
 rewards:
@@ -46,6 +46,7 @@ robot:
     ik_solver: "IK_DLS" # Use string for PyBullet constant name
     home_pose_joints: [0.0, -0.7854, 0.0, -2.3562, 0.0, 1.5708, 0.7854] # Approx pi/4 etc.
     grasp_offset_in_hand_frame: [0.0, 0.0, 0.065] # Default grasp offset
+    max_failed_ik_retries: 3
 
 # Default Camera settings
 camera:

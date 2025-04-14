@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import yaml
 import cv2
+from matplotlib.table import table
 
 from physics_block_rearrangement_env.utils.robot_utils import *
 from physics_block_rearrangement_env.utils.logging_utils import *
@@ -236,6 +237,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # IK settings
         ik_solver_name = panda_cfg.get("ik_solver", "IK_DLS")
         self.ik_solver = getattr(p, ik_solver_name, p.IK_DLS)
+        self.failed_ik_counter = 0
+        self.max_failed_ik_retries = panda_cfg.get("max_failed_ik_retries", 3)
 
         # Default joint pose (home) + IK rest pose
         self.home_pose_joints = panda_cfg.get("home_pose_joints", [
@@ -372,9 +375,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.block_scale = task_cfg.get("block_scale", 0.05)
         self.block_half_extents = [self.block_scale / 2.0] * 3
 
-        self.z_hover_offset = task_cfg.get("z_hover_offset", 0.15)
-        self.grasp_clearance_above_top = task_cfg.get("grasp_clearance_above_top", 0.08)
-        self.place_clearance_above_top = task_cfg.get("place_clearance_above_top", 0.1)
+        self.z_hover_offset = sim_cfg.get("z_hover_offset", 0.15)
+        self.grasp_clearance_above_top = sim_cfg.get("grasp_clearance_above_top", 0.1)
+        self.place_clearance_above_top = sim_cfg.get("place_clearance_above_top", 0.1)
 
         self.primitive_max_steps = sim_cfg.get("primitive_max_steps", 400)
         self.max_steps = sim_cfg.get("max_episode_steps", 50 * self.num_blocks)
@@ -778,7 +781,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self.last_failure_reason = f"place_invalid_{loc_type}_index"
             return False
 
-        if not is_dump and not self.allow_stacking:
+        if not self.allow_stacking:
             if not self._check_target_clear(loc_idx, target_pos):
                 self.last_failure_reason = "place_target_occupied"
                 return False
@@ -817,15 +820,19 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     def _place_sequence(self, loc_type, loc_idx, target_pos):
         """Executes the placement motion and releases the object."""
-        target_z = self.table_height + self.block_half_extents[2]
-        pre_z = self._clamp_hover_z(target_z + self.z_hover_offset)
-        place_z = self._clamp_table_z(target_z + self.place_clearance_above_top)
+        pre_z = self._clamp_hover_z(self.table_height + self.z_hover_offset)
+        place_z = self._clamp_table_z(self.table_height + self.place_clearance_above_top)
+
 
         ori = p.getQuaternionFromEuler([np.pi, 0, 0])
         pre = [target_pos[0], target_pos[1], pre_z]
         place = [target_pos[0], target_pos[1], place_z]
 
         if not self._move_ee_to_pose(pre, ori):
+            if self.failed_ik_counter >= self.max_failed_ik_retries:
+                logger.warning(f"Too many IK failures. Resetting to home.")
+                self._move_to_home_pose()
+                return False
             return False
 
         self._move_ee_to_pose(place, ori)  # Allow soft failures
@@ -846,6 +853,10 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Try moving back up after release
         if not self._move_ee_to_pose(pre, ori):
             logger.warning(f"Post-place lift failed for {loc_type} {loc_idx}")
+            if self.failed_ik_counter >= self.max_failed_ik_retries:
+                logger.warning(f"Too many IK failures. Resetting to home.")
+                self._move_to_home_pose()
+                return False
         return True
 
     # endregion
@@ -863,16 +874,19 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         try:
             # Get current block position
             pos, _ = p.getBasePositionAndOrientation(block_id, self.client)
-            z_top = self._clamp_table_z(pos[2] + self.block_half_extents[2])
 
-            pre = [pos[0], pos[1], z_top + self.z_hover_offset]
-            grasp = [pos[0], pos[1], z_top + self.grasp_clearance_above_top]
-            lift = [pos[0], pos[1], z_top + self.z_hover_offset + 0.05]
+            pre = [pos[0], pos[1], pos[2] + self.z_hover_offset]
+            grasp = [pos[0], pos[1], pos[2] + self.grasp_clearance_above_top]
+            lift = [pos[0], pos[1], pos[2] + self.z_hover_offset + 0.05]
 
             if not self._set_gripper_state("open", wait=True):
                 return False
 
             if not self._move_ee_to_pose(pre, grasp_ori):
+                if self.failed_ik_counter >= self.max_failed_ik_retries:
+                    logger.warning(f"Too many IK failures. Resetting to home.")
+                    self._move_to_home_pose()
+                    return False
                 return False
 
             if not self._move_ee_to_pose(grasp, grasp_ori):
@@ -893,6 +907,10 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
             if not self._move_ee_to_pose(lift, grasp_ori):
                 self._reset_grasp_state()
+                if self.failed_ik_counter >= self.max_failed_ik_retries:
+                    logger.warning(f"Too many IK failures. Resetting to home.")
+                    self._move_to_home_pose()
+                    return False
                 return False
 
             self.held_object_id = block_id
@@ -909,7 +927,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         try:
             pos, current_ori = self._get_ee_pose()
             if pos:
-                up = [pos[0], pos[1], pos[2] + 0.05]
+                up = [pos[0], pos[1], pos[2] + self.z_hover_offset]
                 self._move_ee_to_pose(up, current_ori or ori)
             self._set_gripper_state("open", wait=False)
         except Exception as e:
@@ -982,6 +1000,22 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             logger.exception(f"Error getting EE pose: {e}")
             return None, None
 
+    def _move_to_home_pose(self):
+        for i, joint_index in enumerate(self.arm_joint_indices):
+            p.setJointMotorControl2(
+                bodyUniqueId=self.robot_id,
+                jointIndex=joint_index,
+                controlMode=p.POSITION_CONTROL,
+                targetPosition=self.rest_poses_for_ik[i],  # or define `self.home_joint_angles`
+                force=self.arm_max_forces[i],
+                positionGain=self.arm_kp[i],
+                velocityGain=self.arm_kd[i],
+                physicsClientId=self.client
+            )
+            self.failed_ik_counter = 0
+
+        wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)
+
     def _move_ee_to_pose(self, target_pos, target_ori, max_steps_override=None):
         """Computes IK and moves arm to the target pose. Returns True if pose reached."""
         self._last_ik_failure = False
@@ -992,7 +1026,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         ll, ul, jr = self.arm_limits
         start_time = time.time()
-        joint_poses = p.calculateInverseKinematics(
+
+        joint_poses  = p.calculateInverseKinematics(
             self.robot_id, self.ee_link_index, target_pos, target_ori,
             lowerLimits=ll, upperLimits=ul, jointRanges=jr,
             restPoses=self.rest_poses_for_ik,
@@ -1006,8 +1041,10 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         if not joint_poses or len(joint_poses) < len(self.arm_joint_indices):
             logger.warning(f"IK failed (took {ik_time:.3f}s)")
             self._last_ik_failure = True
+            self.failed_ik_counter += 1
             return False
 
+        self.failed_ik_counter = 0  # reset on success
         poses = joint_poses[:len(self.arm_joint_indices)]
         p.setJointMotorControlArray(self.robot_id, self.arm_joint_indices, p.POSITION_CONTROL,
                                     targetPositions=poses,
@@ -1102,11 +1139,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             candidates = []
 
             for i, cand_yaw in enumerate(candidate_yaws):
+                delta = self._normalize_angle(target_yaw - cand_yaw)
                 cand_quat = p.getQuaternionFromEuler([np.pi, 0.0, cand_yaw])
-                _, _, cand_ee_yaw = p.getEulerFromQuaternion(cand_quat)
 
-                # Yaw difference to target orientation
-                delta = self._normalize_angle(target_yaw - cand_ee_yaw)
                 candidates.append({
                     "label": labels[i],
                     "quat": cand_quat,
