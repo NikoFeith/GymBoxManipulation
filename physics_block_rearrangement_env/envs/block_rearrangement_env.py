@@ -423,26 +423,33 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # region TASK HELPERS
     def _generate_target_positions(self, layout: str) -> list:
         """Generate 2D XY target positions in a line, circle, or random layout."""
+        task_cfg = self.config.get("task", {})
+        target_offset = task_cfg.get("target_offset", [0.0, 0.0])
         base = np.array(self.table_start_pos[:2])
         positions = []
-        z = self.table_height + self.block_half_extents[2] + 0.05
+        z = self.table_height + self.block_half_extents[2] + 0.01
 
         if layout == "line":
-            spacing = 0.15
+            spacing = task_cfg.get("target_spacing", 0.15)
             offset = -((self.num_targets - 1) / 2.0) * spacing
             for i in range(self.num_targets):
-                positions.append([base[0] + 0.2 , base[1] + offset + i * spacing, z])
+                positions.append([base[0] + target_offset[0],
+                                  base[1] + target_offset[1] + i * spacing,
+                                  z])
         elif layout == "circle":
-            radius = 0.12
+            radius = task_cfg.get("target_circle_radius", 0.2)
+
             for i in range(self.num_targets):
                 angle = 2 * np.pi * i / self.num_targets
-                positions.append([base[0] + radius * np.cos(angle), base[1] + radius * np.sin(angle), z])
+                positions.append([base[0] + radius * np.cos(angle) + target_offset[0],
+                                  base[1] + radius * np.sin(angle) + target_offset[1],
+                                  z])
         elif layout == "random":
-            radius = 0.1
+            radius = task_cfg.get("target_circle_radius", 0.2)
             for _ in range(self.num_targets):
                 positions.append([
-                    base[0] + np.random.uniform(-radius, radius),
-                    base[1] + np.random.uniform(-radius, radius),
+                    base[0] + target_offset[0] + np.random.uniform(-radius, radius),
+                    base[1] + target_offset[0] + np.random.uniform(-radius, radius),
                     z
                 ])
         else:

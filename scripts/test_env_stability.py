@@ -22,7 +22,7 @@ except ImportError:
 ENV_ID = "PhysicsBlockRearrangement-v0"
 NUM_EPISODES = 50
 MAX_STEPS_PER_EPISODE = 200
-TASK_CONFIG_FILE = "place_4_line.yaml" # Use default task
+TASK_CONFIG_FILE = "place_4_circle.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
@@ -66,7 +66,7 @@ def run_stability_test():
 
     try:
         # Create the environment (always headless for stability/speed)
-        env_kwargs = {'use_gui': False, 'render_mode': 'rgb_array'} # Must be rgb_array to get obs
+        env_kwargs = {'use_gui': False, 'render_mode': 'human'} # Must be rgb_array to get obs
         if TASK_CONFIG_FILE:
             env_kwargs['task_config_file'] = TASK_CONFIG_FILE
 

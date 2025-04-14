@@ -7,8 +7,8 @@ task:
   num_dump_locations: 1
   allow_stacking: false
   target_layout: 'circle'
-  target_spacing: 0.15
-  line_x_offset: 0.25
+  target_circle_radius: 0.15
+  target_offset: [0.0, 0.1]
   spawn_bounds_relative: [-0.2, 0.2, -0.3, 0.35]
-  dump_base_pos: [0.3, 0.0]
+  dump_base_pos: [0.0, -0.25]
   max_episode_steps: 100

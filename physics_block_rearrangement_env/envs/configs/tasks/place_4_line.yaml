@@ -8,7 +8,7 @@ task:
   allow_stacking: false
   target_layout: 'line'
   target_spacing: 0.15
-  line_x_offset: 0.25
+  target_offset: [0.0, 0.0]
   spawn_bounds_relative: [-0.2, 0.2, -0.3, 0.35]
   dump_base_pos: [0.3, 0.0]
   max_episode_steps: 100
