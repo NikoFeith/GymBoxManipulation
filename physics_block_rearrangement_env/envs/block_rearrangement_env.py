@@ -365,6 +365,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         """
         task_cfg = self.config.get("task", {})
         sim_cfg = self.config.get("simulation", {})
+        reward_cfg = self.config.get("reward", {})
 
         self.target_layout = task_cfg.get("target_layout", "line")
         self.num_blocks = task_cfg.get("num_blocks", 1)
@@ -388,9 +389,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.orientation_reached_threshold = sim_cfg.get("orientation_reached_threshold", 0.1)
 
         # Rewards
-        self.goal_reward = task_cfg.get("goal_reward", 1.0)
-        self.step_penalty = task_cfg.get("step_penalty", -0.01)
-        self.move_fail_penalty = task_cfg.get("move_fail_penalty", 0.005)
+        self.goal_reward = reward_cfg.get("goal_reward", 1.0)
+        self.step_penalty = reward_cfg.get("step_penalty", -0.01)
+        self.move_fail_penalty = reward_cfg.get("move_fail_penalty", 0.005)
 
     def _load_colors(self):
         """
@@ -437,8 +438,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             offset = -((self.num_targets - 1) / 2.0) * spacing
             for i in range(self.num_targets):
                 positions.append([base[0] + target_offset[0],
-                                  base[1] + target_offset[1] + i * spacing,
+                                  base[1] + target_offset[1]+ offset + i * spacing,
                                   z])
+
         elif layout == "circle":
             radius = task_cfg.get("target_circle_radius", 0.2)
 
@@ -662,7 +664,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         obs = self._get_obs()
 
         terminated = self.task.check_goal()
+
         reward = self.goal_reward if terminated else self.step_penalty
+
         self.current_steps += 1
 
         # Truncate if max steps reached or required blocks are unreachable
@@ -1117,61 +1121,49 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     def _calculate_preferred_grasp_orientation(self, current_block_orn_quat, target_block_orn_quat=None):
         """
         Computes two possible grasp orientations (±90° from block yaw) and selects the one
-        that requires the least rotation to reach the target orientation.
+        that requires the least yaw rotation to reach the target orientation.
 
         Tie-breakers:
         1. Prefer lower absolute delta yaw to target
         2. Prefer smaller signed delta
         3. Prefer positive rotation
-
-        Returns:
-            (preferred_quat, alternative_quat): grasp orientations as world-frame quaternions
         """
         if target_block_orn_quat is None:
             target_block_orn_quat = p.getQuaternionFromEuler([0, 0, 0])
 
-        try:
-            # Convert current and target orientations to yaw (Z-axis rotation only)
-            current_yaw = p.getEulerFromQuaternion(current_block_orn_quat)[2]
-            target_yaw = p.getEulerFromQuaternion(target_block_orn_quat)[2]
+        # Extract only yaw (Z axis) from current and target
+        current_yaw = p.getEulerFromQuaternion(current_block_orn_quat)[2]
+        target_yaw = p.getEulerFromQuaternion(target_block_orn_quat)[2]
 
-            # Two candidate grasps: ±90° offset from block yaw
-            candidate_yaws = [current_yaw + np.pi / 2, current_yaw - np.pi / 2]
-            labels = ["+90", "-90"]
-            candidates = []
+        # Candidate grasp yaws (0 / ±90° from block orientation)
+        candidate_yaws = [current_yaw + np.pi, current_yaw + np.pi / 2, current_yaw, current_yaw - np.pi / 2]
+        labels = ["+180°, +90", "0", "-90"]
+        candidates = []
 
-            for i, cand_yaw in enumerate(candidate_yaws):
-                delta = self._normalize_angle(target_yaw - cand_yaw)
-                cand_quat = p.getQuaternionFromEuler([np.pi, 0.0, cand_yaw])
+        for label, cand_yaw in zip(labels, candidate_yaws):
+            # Only compare yaw difference
+            delta = self._normalize_angle(target_yaw - cand_yaw)
+            quat = p.getQuaternionFromEuler([np.pi, 0, cand_yaw])  # gripper flipped over, rotated by yaw
 
-                candidates.append({
-                    "label": labels[i],
-                    "quat": cand_quat,
-                    "delta": delta,
-                    "abs_delta": abs(delta)
-                })
+            candidates.append({
+                "label": label,
+                "quat": quat,
+                "delta": delta,
+                "abs_delta": abs(delta)
+            })
 
-            # Sort with tie-breakers
-            candidates.sort(key=lambda c: (c["abs_delta"], c["delta"], -c["delta"] > 0))
+        # Sort with tie-breakers
+        candidates.sort(key=lambda c: (c["abs_delta"], c["delta"], -c["delta"] > 0))
 
-            preferred = candidates[0]
-            alternative = candidates[1]
+        preferred = candidates[0]
+        alternative = candidates[1]
 
-            logger.debug(
-                f"Grasp choice → Preferred: {preferred['label']} (Δ={preferred['delta']:.2f}), "
-                f"Alternative: {alternative['label']} (Δ={alternative['delta']:.2f})"
-            )
+        logger.debug(
+            f"Grasp choice → Preferred: {preferred['label']} (Δ={preferred['delta']:.2f}), "
+            f"Alternative: {alternative['label']} (Δ={alternative['delta']:.2f})"
+        )
 
-            return preferred["quat"], alternative["quat"]
-
-        except Exception as e:
-            logger.error(f"Error in grasp orientation computation: {e}", exc_info=True)
-            return None, None
-
-
-        except Exception as e:
-            logger.error(f"Grasp orientation calc failed: {e}")
-            return None, None
+        return preferred["quat"], alternative["quat"]
 
     def _clamp_hover_z(self, z):
         return max(z, self.z_hover_offset + self.table_height)
