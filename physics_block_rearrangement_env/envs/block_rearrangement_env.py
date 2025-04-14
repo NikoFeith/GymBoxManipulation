@@ -1013,6 +1013,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 physicsClientId=self.client
             )
             self.failed_ik_counter = 0
+            self.last_failure_reason = "home pose recovery"
 
         wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)
 
@@ -1042,6 +1043,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             logger.warning(f"IK failed (took {ik_time:.3f}s)")
             self._last_ik_failure = True
             self.failed_ik_counter += 1
+            self.last_failure_reason = "ik_calculation_failed"
             return False
 
         self.failed_ik_counter = 0  # reset on success

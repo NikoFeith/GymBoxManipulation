@@ -1,9 +1,9 @@
-# configs/tasks/place_4_circle.yaml
+# configs/tasks/place_3_line.yaml
 task:
   name: "Place 4 Blocks in a Circle"
   task_class_name: "BlockPlacementTask" # Specify which class handles this
-  num_blocks: 4
-  num_targets: 4
+  num_blocks: 3
+  num_targets: 3
   num_dump_locations: 1
   allow_stacking: false
   target_layout: 'circle'

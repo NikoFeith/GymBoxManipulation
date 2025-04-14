@@ -1,9 +1,9 @@
-# configs/tasks/place_4_line.yaml
+# configs/tasks/place_5_line.yaml
 task:
-  name: "Place 4 Blocks in Line"
+  name: "Place 5 Blocks in Line"
   task_class_name: "BlockPlacementTask" # Specify which class handles this
-  num_blocks: 4
-  num_targets: 4
+  num_blocks: 5
+  num_targets: 5
   num_dump_locations: 1
   allow_stacking: false
   target_layout: 'line'
