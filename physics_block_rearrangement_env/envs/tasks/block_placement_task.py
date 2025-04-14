@@ -2,6 +2,7 @@
 import numpy as np
 import pybullet as p
 import math
+import random
 from ..task_interface import BaseTask
 from physics_block_rearrangement_env.utils.logging_utils import *
 
@@ -59,6 +60,8 @@ class BlockPlacementTask(BaseTask):
         final_dumps = []
         dump_z = self.env.table_height + 0.005
         min_dist = 0.1  # minimum distance from target to consider it "clear"
+
+        random.shuffle(dump_candidates)
 
         for pos in dump_candidates:
             pos_3d = [pos[0], pos[1], dump_z]
