@@ -572,8 +572,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # region RL INTERFACE SETUP
     def _setup_action_space(self):
         """Defines the discrete action space for pick/place/dump actions."""
-        self.num_actions = self.num_blocks + self.num_targets + self.num_dump_locations
-        self.action_space = spaces.Discrete(self.num_actions)
+        self.action_space = spaces.MultiDiscrete([self.num_blocks, self.num_targets + self.num_dump_locations])
         logger.info(f"Action space = Discrete({self.num_actions})")
 
     def _setup_observation_space(self):
@@ -660,18 +659,27 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     def step(self, action):
         """Executes one action primitive and returns (obs, reward, terminated, truncated, info)."""
-        success = self._execute_primitive(action)
+        block_idx, location_idx = action
+
+        if self.held_object_id is None:
+            # Attempt to pick block
+            success = self._primitive_pick(block_idx)
+        else:
+            flat_index = self.num_blocks + location_idx
+            success = self._primitive_place(flat_index)
+
+        # Force drop if stuck with something
+        if self.held_object_id is not None and not success:
+            logger.warning("Force-dropping held object after failed place.")
+            self._reset_grasp_state()
+
         obs = self._get_obs()
-
-        terminated = self.task.check_goal()
-
-        reward = self.goal_reward if terminated else self.step_penalty
-
         self.current_steps += 1
 
-        # Truncate if max steps reached or required blocks are unreachable
+        terminated = self.task.check_goal()
         truncated = self.current_steps >= self.max_steps or self._goal_blocks_fell()
 
+        reward = self.goal_reward if terminated else self.step_penalty
         if not success:
             reward += self.move_fail_penalty
 
