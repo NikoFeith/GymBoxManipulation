@@ -136,7 +136,7 @@ class BlockPlacementTask(BaseTask):
 
         Args:
             mapping_type (str): Either 'ordered' or 'random'.
-                - 'ordered' maps block i → target i.
+                - 'ordered' maps target i → block i.
                 - 'random' shuffles target assignments.
 
         Returns:

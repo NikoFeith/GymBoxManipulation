@@ -493,9 +493,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         for i, target_pos in enumerate(self.target_locations_pos):
             # Default to gray if no color can be assigned
-            assigned_block_idx = self.goal_config.get(i, -1)
-            if assigned_block_idx != -1:
-                rgba = self.target_colors_rgba[assigned_block_idx % len(self.target_colors_rgba)]
+            if i != -1:
+                rgba = self.target_colors_rgba[i % len(self.target_colors_rgba)]
             else:
                 rgba = [0.5, 0.5, 0.5, 0.5]  # semi-transparent gray fallback
 
@@ -522,8 +521,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         if len(valid_positions) < num_blocks:
             raise RuntimeError("Not enough valid positions to spawn blocks.")
 
-        for i in range(num_blocks):
-            xy = valid_positions[i]
+        for target_idx, block_idx in self.goal_config.items():
+            xy = valid_positions[block_idx]
             z = self.table_height + self.block_half_extents[2] + 0.001
             pos = [xy[0], xy[1], z]
             orn = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
@@ -533,7 +532,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                       globalScaling=self.block_scale,
                                       physicsClientId=self.client)
 
-                color = self.block_colors_rgba[i % len(self.block_colors_rgba)]
+                color = self.block_colors_rgba[target_idx % len(self.block_colors_rgba)]
                 p.changeVisualShape(block_id, -1, rgbaColor=color, physicsClientId=self.client)
                 self.block_ids.append(block_id)
             except Exception as e:
@@ -573,7 +572,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     def _setup_action_space(self):
         """Defines the discrete action space for pick/place/dump actions."""
         self.action_space = spaces.MultiDiscrete([self.num_blocks, self.num_targets + self.num_dump_locations])
-        logger.info(f"Action space = Discrete({self.num_actions})")
+        logger.info(f"Action space = MultiDiscrete({self.action_space.shape})")
 
     def _setup_observation_space(self):
         """Defines the observation space as a camera-based RGB image."""
@@ -661,12 +660,21 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         """Executes one action primitive and returns (obs, reward, terminated, truncated, info)."""
         block_idx, location_idx = action
 
-        if self.held_object_id is None:
-            # Attempt to pick block
-            success = self._primitive_pick(block_idx)
+        # Always begin by dropping anything we're holding
+        if self.held_object_id is not None:
+            self._reset_grasp_state()
+
+        # Step 1: Try to grasp the requested block
+        success_pick = self._primitive_pick(block_idx)
+
+        # Step 2: If grasp succeeded, try to place at target or dump
+        if success_pick:
+            success_place = self._primitive_place(location_idx)
         else:
-            flat_index = self.num_blocks + location_idx
-            success = self._primitive_place(flat_index)
+            success_place = False
+
+        # Final result counts as success only if both pick & place succeeded
+        success = success_pick and success_place
 
         # Force drop if stuck with something
         if self.held_object_id is not None and not success:
@@ -692,16 +700,31 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         if not self.goal_config:
             return False
 
+        task_cfg = self.config.get("task")
+
         required_blocks = set(self.goal_config.values())
-        min_z = self.table_height * 0.5  # Threshold well below table
+
+        min_x = task_cfg.get("min_x", -0.3) + self.table_start_pos[0]
+        max_x = task_cfg.get("max_x", 0.3) + self.table_start_pos[0]
+        min_y = task_cfg.get("min_y", -0.3) + self.table_start_pos[1]
+        max_y = task_cfg.get("max_y", 0.3) + self.table_start_pos[1]
+
+        min_z = self.table_height * 0.8  # Threshold well below table
 
         for block_idx in required_blocks:
             if block_idx < len(self.block_ids):
                 try:
-                    z = p.getBasePositionAndOrientation(self.block_ids[block_idx], self.client)[0][2]
+                    x, y, z = p.getBasePositionAndOrientation(self.block_ids[block_idx], self.client)[0]
                     if z < min_z:
                         logger.warning(f"Goal block {block_idx} fell below Z={z:.3f}.")
                         return True
+                    if not (min_x <= x <= max_x):
+                        logger.warning(f"Goal block {block_idx} fell out of x-boundary  X={x:.3f}.")
+                        return True
+                    if not (min_y <= y <= max_y):
+                        logger.warning(f"Goal block {block_idx} fell out of y-boundary  Y={y:.3f}.")
+                        return True
+
                 except Exception as e:
                     logger.error(f"Error checking Z of block {block_idx}: {e}")
                     return True
@@ -710,28 +733,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # endregion
 
     # region PRIMITIVES
-    def _execute_primitive(self, action_index):
-        """
-        Dispatches high-level primitives: pick or place.
-        Returns True if the action succeeds, otherwise False.
-        """
-        logger.info(f"Executing Action Index: {action_index}")
-
-        try:
-            if 0 <= action_index < self.num_blocks:
-                return self._primitive_pick(action_index)
-
-            elif action_index < self.num_actions:
-                return self._primitive_place(action_index)
-
-            logger.warning(f"Invalid action index {action_index}")
-            return False
-
-        except Exception as e:
-            logger.exception(f"Unhandled error in _execute_primitive: {e}")
-            self._reset_grasp_state()  # Always clean up
-            return False
-
     def _primitive_pick(self, block_idx):
         """Tries to pick up the block at the given index using dual-orientation fallback."""
         if self.held_object_id is not None:
@@ -771,34 +772,46 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.last_failure_reason = "both_orientations_failed"
         return False
 
-    def _primitive_place(self, action_index):
+    def _primitive_place(self, location_idx):
         """Handles placing at a target or dump location."""
+        if location_idx < 0:
+            logger.warning(f"Place failed: negative index {location_idx}")
+            self.last_failure_reason = "negative_place_index"
+            return False
+
         if self.held_object_id is None:
             logger.warning("Place failed: nothing is held.")
             self.last_failure_reason = "place_nothing_held"
             return False
 
-        is_dump = action_index >= self.num_blocks + self.num_targets
+        num_dumps = self.action_space.nvec[1] - self.num_targets
+        is_dump = location_idx < num_dumps
+
         if is_dump:
             loc_type = "dump"
-            loc_idx = 0
-            target_pos = self._get_dump_location(loc_idx)
+            target_pos = self._get_dump_location(location_idx)
         else:
+            target_idx = location_idx - num_dumps
             loc_type = "target"
-            loc_idx = action_index - self.num_blocks
-            target_pos = self._get_target_location(loc_idx)
+            target_pos = self._get_target_location(target_idx)
 
         if target_pos is None:
-            logger.warning(f"Place failed: invalid {loc_type} index {loc_idx}")
+            logger.warning(f"Place failed: invalid {loc_type} index {location_idx}")
             self.last_failure_reason = f"place_invalid_{loc_type}_index"
             return False
 
         if not self.allow_stacking:
-            if not self._check_target_clear(loc_idx, target_pos):
+            is_occupied = self._check_target_clear(location_idx, target_pos)
+            if is_dump and not is_occupied:
+                logger.warning("Dump location already occupied.")
+                self.last_failure_reason = "dump_overflow"
+                return False
+            elif not is_occupied:
+                logger.warning("Target location already occupied.")
                 self.last_failure_reason = "place_target_occupied"
                 return False
 
-        success = self._place_sequence(loc_type, loc_idx, target_pos)
+        success = self._place_sequence(loc_type, location_idx, target_pos)
         if not success:
             self.last_failure_reason = "place_sequence_failed"
         return success
@@ -939,7 +952,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         try:
             pos, current_ori = self._get_ee_pose()
             if pos:
-                up = [pos[0], pos[1], pos[2] + self.z_hover_offset]
+                up = [pos[0], pos[1], self.table_height + self.z_hover_offset]
                 self._move_ee_to_pose(up, current_ori or ori)
             self._set_gripper_state("open", wait=False)
         except Exception as e:
@@ -956,7 +969,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         self.held_object_id = None
         self.held_object_idx = None
-        self._set_gripper_state("open", wait=False)
+        self._set_gripper_state("open", wait=True)
+        self._move_to_home_pose()
 
     def _attach_constraint(self, block_id, grasp_ori):
         """Creates a fixed joint between EE and block."""
@@ -1145,7 +1159,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # Candidate grasp yaws (0 / ±90° from block orientation)
         candidate_yaws = [current_yaw + np.pi, current_yaw + np.pi / 2, current_yaw, current_yaw - np.pi / 2]
-        labels = ["+180°, +90", "0", "-90"]
+        labels = ["+180°","+90", "0", "-90"]
         candidates = []
 
         for label, cand_yaw in zip(labels, candidate_yaws):
@@ -1216,6 +1230,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         p.changeVisualShape(self.robot_id, -1, rgbaColor=[1, 1, 1, 1], physicsClientId=self.client)
         for link_idx in range(num_links):
             p.changeVisualShape(self.robot_id, link_idx, rgbaColor=[1, 1, 1, 1], physicsClientId=self.client)
+
+        logger.debug("Observation taken!")
 
         return rgb_array
 

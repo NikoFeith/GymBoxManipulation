@@ -26,6 +26,7 @@ TASK_CONFIG_FILE = "place_3_line.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
+USE_GUI = False
 DISPLAY_WIDTH = 336   # Display size if VISUALIZE_OBS is True
 DISPLAY_HEIGHT = 336
 # ---------------------------
@@ -68,7 +69,7 @@ def run_stability_test():
 
     try:
         # Create the environment (always headless for stability/speed)
-        env_kwargs = {'use_gui': False, 'render_mode': 'rgb_array'} # Must be rgb_array to get obs
+        env_kwargs = {'use_gui': USE_GUI, 'render_mode': 'rgb_array'} # Must be rgb_array to get obs
         if TASK_CONFIG_FILE:
             env_kwargs['task_config_file'] = TASK_CONFIG_FILE
 
@@ -77,7 +78,7 @@ def run_stability_test():
         print("Environment created successfully.")
 
         assert isinstance(env.observation_space, gym.spaces.Box), "Observation space should be Box"
-        assert isinstance(env.action_space, gym.spaces.Discrete), "Action space should be Discrete"
+        assert isinstance(env.action_space, gym.spaces.MultiDiscrete), "Action space should be MultiDiscrete"
         print(f"Observation Space: {env.observation_space}")
         print(f"Action Space: {env.action_space}")
 
