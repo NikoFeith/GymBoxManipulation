@@ -1,3 +1,5 @@
+import random
+
 import gymnasium as gym
 from gymnasium import spaces
 import pybullet as p
@@ -414,7 +416,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         if self.num_blocks <= len(all_block):
             self.block_colors_rgba = all_block[:self.num_blocks]
-            self.target_colors_rgba = all_target[:self.num_blocks]
+            self.target_colors_rgba = all_target[:self.num_targets]
         else:
             logger.warning("Block count exceeds color list. Repeating colors.")
             self.block_colors_rgba = (all_block * ((self.num_blocks // len(all_block)) + 1))[:self.num_blocks]
@@ -426,9 +428,26 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     # region TASK HELPERS
     def _generate_target_positions(self, layout: str) -> list:
-        """Generate 2D XY target positions in a line, circle, or random layout."""
+        """Generate 2D XY target positions in a line, circle, or random layout, with optional rotation and offset jitter."""
         task_cfg = self.config.get("task", {})
-        target_offset = task_cfg.get("target_offset", [0.0, 0.0])
+        target_offset = np.array(task_cfg.get("target_offset", [0.0, 0.0]))
+        target_position_randomization = task_cfg.get("target_position_randomization", True)
+
+        if target_position_randomization:
+            # Add slight positional jitter
+            target_offset += np.array([
+                self.np_random.uniform(0, 0.2),
+                self.np_random.uniform(0, 0.2)
+            ])
+            # Create rotation matrix with random angle
+            theta = self.np_random.uniform(0, 2 * np.pi)
+            target_rotation = np.array([
+                [np.cos(theta), -np.sin(theta)],
+                [np.sin(theta), np.cos(theta)]
+            ])
+        else:
+            target_rotation = np.eye(2)  # identity matrix, no rotation
+
         base = np.array(self.table_start_pos[:2])
         positions = []
         z = self.table_height + self.block_half_extents[2] + 0.01
@@ -437,28 +456,41 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             spacing = task_cfg.get("target_spacing", 0.15)
             offset = -((self.num_targets - 1) / 2.0) * spacing
             for i in range(self.num_targets):
-                positions.append([base[0] + target_offset[0],
-                                  base[1] + target_offset[1]+ offset + i * spacing,
-                                  z])
+                pos_xy = np.array([
+                    base[0] + target_offset[0],
+                    base[1] + target_offset[1] + offset + i * spacing
+                ])
+                positions.append([pos_xy[0], pos_xy[1], z])
 
         elif layout == "circle":
             radius = task_cfg.get("target_circle_radius", 0.2)
-
             for i in range(self.num_targets):
                 angle = 2 * np.pi * i / self.num_targets
-                positions.append([base[0] + radius * np.cos(angle) + target_offset[0],
-                                  base[1] + radius * np.sin(angle) + target_offset[1],
-                                  z])
+                pos_xy = np.array([
+                    base[0] + target_offset[0] + radius * np.cos(angle),
+                    base[1] + target_offset[1] + radius * np.sin(angle)
+                ])
+                positions.append([pos_xy[0], pos_xy[1], z])
+
         elif layout == "random":
             radius = task_cfg.get("target_circle_radius", 0.2)
             for _ in range(self.num_targets):
-                positions.append([
-                    base[0] + target_offset[0] + np.random.uniform(-radius, radius),
-                    base[1] + target_offset[0] + np.random.uniform(-radius, radius),
-                    z
+                pos_xy = np.array([
+                    base[0] + target_offset[0] + self.np_random.uniform(-radius, radius),
+                    base[1] + target_offset[1] + self.np_random.uniform(-radius, radius)
                 ])
+                positions.append([pos_xy[0], pos_xy[1], z])
+
         else:
             raise ValueError(f"Unknown target layout: {layout}")
+
+        # --- Apply rotation around center of positions (if enabled) ---
+        if target_position_randomization:
+            xy = np.array([p[:2] for p in positions])
+            z_vals = [p[2] for p in positions]
+            center = np.mean(xy, axis=0)
+            rotated_xy = (xy - center) @ target_rotation.T + center
+            positions = [[x, y, z_vals[i]] for i, (x, y) in enumerate(rotated_xy)]
 
         return positions
 
@@ -491,10 +523,10 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         plate_half_extents = [0.04, 0.04, 0.0005]
         plate_center_z = self.table_height + plate_half_extents[2] + 0.0001
 
-        for i, target_pos in enumerate(self.target_locations_pos):
+        for target_idx, target_pos in enumerate(self.target_locations_pos):
             # Default to gray if no color can be assigned
-            if i != -1:
-                rgba = self.target_colors_rgba[i % len(self.target_colors_rgba)]
+            if target_idx != -1:
+                rgba = self.target_colors_rgba[target_idx % len(self.target_colors_rgba)]
             else:
                 rgba = [0.5, 0.5, 0.5, 0.5]  # semi-transparent gray fallback
 
@@ -508,9 +540,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 if plate_id >= 0:
                     self.target_ids.append(plate_id)
                 else:
-                    logger.warning(f"Failed to create visual for target {i}")
+                    logger.warning(f"Failed to create visual for target {target_idx}")
             except Exception as e:
-                logger.exception(f"Error creating target plate {i}: {e}")
+                logger.exception(f"Error creating target plate {target_idx}: {e}")
 
     def _spawn_blocks(self, num_blocks):
         """Spawns URDF cubes in valid positions avoiding targets and dumps."""
@@ -522,21 +554,22 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             raise RuntimeError("Not enough valid positions to spawn blocks.")
 
         for target_idx, block_idx in self.goal_config.items():
-            xy = valid_positions[block_idx]
-            z = self.table_height + self.block_half_extents[2] + 0.001
-            pos = [xy[0], xy[1], z]
-            orn = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
+            if block_idx is not None:
+                xy = valid_positions[block_idx]
+                z = self.table_height + self.block_half_extents[2] + 0.001
+                pos = [xy[0], xy[1], z]
+                orn = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
 
-            try:
-                block_id = p.loadURDF("cube.urdf", pos, orn,
-                                      globalScaling=self.block_scale,
-                                      physicsClientId=self.client)
+                try:
+                    block_id = p.loadURDF("cube.urdf", pos, orn,
+                                          globalScaling=self.block_scale,
+                                          physicsClientId=self.client)
 
-                color = self.block_colors_rgba[target_idx % len(self.block_colors_rgba)]
-                p.changeVisualShape(block_id, -1, rgbaColor=color, physicsClientId=self.client)
-                self.block_ids.append(block_id)
-            except Exception as e:
-                logger.error(f"Error spawning block {i}: {e}")
+                    color = self.block_colors_rgba[target_idx % len(self.block_colors_rgba)]
+                    p.changeVisualShape(block_id, -1, rgbaColor=color, physicsClientId=self.client)
+                    self.block_ids.append(block_id)
+                except Exception as e:
+                    logger.error(f"Error spawning block {block_idx}: {e}")
 
     def _get_valid_spawn_positions(self, num_required):
         """Generates non-overlapping positions for spawning blocks."""
@@ -712,7 +745,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         min_z = self.table_height * 0.8  # Threshold well below table
 
         for block_idx in required_blocks:
-            if block_idx < len(self.block_ids):
+            if block_idx is None:
+                continue
+            elif block_idx < len(self.block_ids):
                 try:
                     x, y, z = p.getBasePositionAndOrientation(self.block_ids[block_idx], self.client)[0]
                     if z < min_z:

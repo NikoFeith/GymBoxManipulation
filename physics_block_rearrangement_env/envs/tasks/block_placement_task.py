@@ -116,39 +116,51 @@ class BlockPlacementTask(BaseTask):
         env = self.env
         if env.held_object_id is not None: return False
         if not env.goal_config: return False
+
         on_target_count = 0
         for target_loc_idx, required_block_idx in env.goal_config.items():
-            if required_block_idx >= len(env.block_ids) or target_loc_idx >= len(env.target_locations_pos): continue
+            if required_block_idx is None:
+                continue  # skip unassigned targets
+
+            if required_block_idx >= len(env.block_ids) or target_loc_idx >= len(env.target_locations_pos):
+                continue
+
             block_id = env.block_ids[required_block_idx]
             target_pos = env.target_locations_pos[target_loc_idx]
+
             try:
                 current_pos, _ = p.getBasePositionAndOrientation(block_id, physicsClientId=env.client)
                 dist_xy = np.linalg.norm(np.array(current_pos[:2]) - np.array(target_pos[:2]))
                 on_surface = abs(current_pos[2] - (env.table_height + env.block_half_extents[2])) < 0.02
                 if dist_xy < self.goal_dist_threshold and on_surface:
                     on_target_count += 1
-            except Exception: return False
-        return on_target_count == len(env.goal_config)
+            except Exception:
+                return False
+
+        return on_target_count == sum(1 for b in env.goal_config.values() if b is not None)
 
     def _generate_goal_config(self, mapping_type: str = "random") -> dict:
         """
-        Generate a mapping from block indices to target indices.
-
-        Args:
-            mapping_type (str): Either 'ordered' or 'random'.
-                - 'ordered' maps target i → block i.
-                - 'random' shuffles target assignments.
-
-        Returns:
-            dict: goal_config where keys are block indices and values are target indices.
+        Generate a stable goal_config: target_id → block_id or None.
+        - Randomizes which targets are active (visually useful).
+        - Ensures target indices remain sorted for consistency.
         """
         num_blocks = self.env.num_blocks
-        block_indices = list(range(num_blocks))
+        num_targets = self.env.num_targets
+
+        block_ids = list(range(num_blocks))
+        target_ids = list(range(num_targets))
 
         if mapping_type == "random":
-            target_indices = block_indices.copy()
-            self.env.np_random.shuffle(target_indices)
-        else:  # fallback to ordered
-            target_indices = block_indices
+            self.env.np_random.shuffle(block_ids)
+            self.env.np_random.shuffle(target_ids)
 
-        return {t: b for b, t in zip(block_indices, target_indices)}
+        goal_config = {}
+        for i, target_id in enumerate(target_ids):
+            if i < len(block_ids):
+                goal_config[target_id] = block_ids[i]
+            else:
+                goal_config[target_id] = None
+
+        # Sort goal_config by target index
+        return dict(sorted(goal_config.items()))
