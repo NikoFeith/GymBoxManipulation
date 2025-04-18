@@ -677,11 +677,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             logger.warning("Skipping robot reset: joint indices not initialized.")
             return
 
-        print("Robot ID:", self.robot_id)
-        print("Num joints:", p.getNumJoints(self.robot_id))
-        for i in range(p.getNumJoints(self.robot_id)):
-            print(i, p.getJointInfo(self.robot_id, i)[1])
-
         # Reset arm joints
         for i, idx in enumerate(self.arm_joint_indices):
             p.resetJointState(self.robot_id, idx, self.home_pose_joints[i], 0.0, self.client)
