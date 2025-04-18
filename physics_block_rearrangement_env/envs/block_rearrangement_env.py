@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 import yaml
 import cv2
-from matplotlib.table import table
 
 from physics_block_rearrangement_env.utils.robot_utils import *
 from physics_block_rearrangement_env.utils.logging_utils import *
@@ -69,8 +68,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.held_object_idx = None
         self.grasp_constraint_id = None
         self.goal_config = {}
-        self.block_ids = []            # IDs of active block objects
-        self.target_ids = []           # IDs of active target visuals
+        self.block_ids = {}            # IDs of active block objects
+        self.target_ids = {}           # IDs of active target visuals
         self.target_locations_pos = [] # Will be filled on reset
         self.dump_location_pos = []    # Will be filled on reset
 
@@ -436,8 +435,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         if target_position_randomization:
             # Add slight positional jitter
             target_offset += np.array([
-                self.np_random.uniform(0, 0.2),
-                self.np_random.uniform(0, 0.2)
+                self.np_random.uniform(0, 0.05),
+                self.np_random.uniform(0, 0.05)
             ])
             # Create rotation matrix with random angle
             theta = self.np_random.uniform(0, 2 * np.pi)
@@ -449,45 +448,45 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             target_rotation = np.eye(2)  # identity matrix, no rotation
 
         base = np.array(self.table_start_pos[:2])
-        positions = []
+        positions = {}
         z = self.table_height + self.block_half_extents[2] + 0.01
 
         if layout == "line":
             spacing = task_cfg.get("target_spacing", 0.15)
             offset = -((self.num_targets - 1) / 2.0) * spacing
-            for i in range(self.num_targets):
+            for target_idx in range(self.num_targets):
                 pos_xy = np.array([
                     base[0] + target_offset[0],
-                    base[1] + target_offset[1] + offset + i * spacing
+                    base[1] + target_offset[1] + offset + target_idx * spacing
                 ])
-                positions.append([pos_xy[0], pos_xy[1], z])
+                positions[target_idx] = [pos_xy[0], pos_xy[1], z]
 
         elif layout == "circle":
             radius = task_cfg.get("target_circle_radius", 0.2)
-            for i in range(self.num_targets):
-                angle = 2 * np.pi * i / self.num_targets
+            for target_idx in range(self.num_targets):
+                angle = 2 * np.pi * target_idx / self.num_targets
                 pos_xy = np.array([
                     base[0] + target_offset[0] + radius * np.cos(angle),
                     base[1] + target_offset[1] + radius * np.sin(angle)
                 ])
-                positions.append([pos_xy[0], pos_xy[1], z])
+                positions[target_idx] = [pos_xy[0], pos_xy[1], z]
 
         elif layout == "random":
             radius = task_cfg.get("target_circle_radius", 0.2)
-            for _ in range(self.num_targets):
+            for target_idx in range(self.num_targets):
                 pos_xy = np.array([
                     base[0] + target_offset[0] + self.np_random.uniform(-radius, radius),
                     base[1] + target_offset[1] + self.np_random.uniform(-radius, radius)
                 ])
-                positions.append([pos_xy[0], pos_xy[1], z])
+                positions[target_idx] = [pos_xy[0], pos_xy[1], z]
 
         else:
             raise ValueError(f"Unknown target layout: {layout}")
 
         # --- Apply rotation around center of positions (if enabled) ---
         if target_position_randomization:
-            xy = np.array([p[:2] for p in positions])
-            z_vals = [p[2] for p in positions]
+            xy = np.array([pos[:2] for pos in positions.values()])
+            z_vals = [pos[2] for pos in positions.values()]
             center = np.mean(xy, axis=0)
             rotated_xy = (xy - center) @ target_rotation.T + center
             positions = [[x, y, z_vals[i]] for i, (x, y) in enumerate(rotated_xy)]
@@ -506,7 +505,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     def _place_target_visuals(self):
         """Places visual markers (plates) at the target locations."""
-        self.target_ids = []
+        self.target_ids = {}
         if not hasattr(self, 'target_locations_pos') or not self.target_locations_pos:
             logger.warning("Warning: Target locations not defined, cannot place visuals.")
             return
@@ -538,7 +537,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                              basePosition=[target_pos[0], target_pos[1], plate_center_z],
                                              baseOrientation=[0, 0, 0, 1], physicsClientId=self.client)
                 if plate_id >= 0:
-                    self.target_ids.append(plate_id)
+                    self.target_ids[target_idx] = {'plate_id':plate_id, 'vis_id': vis_id}
                 else:
                     logger.warning(f"Failed to create visual for target {target_idx}")
             except Exception as e:
@@ -546,7 +545,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     def _spawn_blocks(self, num_blocks):
         """Spawns URDF cubes in valid positions avoiding targets and dumps."""
-        self.block_ids = []
+        self.block_ids = {}
         logger.debug(f"Spawning {num_blocks} blocks...")
 
         valid_positions = self._get_valid_spawn_positions(num_blocks)
@@ -561,13 +560,13 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 orn = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
 
                 try:
-                    block_id = p.loadURDF("cube.urdf", pos, orn,
+                    body_id = p.loadURDF("cube.urdf", pos, orn,
                                           globalScaling=self.block_scale,
                                           physicsClientId=self.client)
 
                     color = self.block_colors_rgba[target_idx % len(self.block_colors_rgba)]
-                    p.changeVisualShape(block_id, -1, rgbaColor=color, physicsClientId=self.client)
-                    self.block_ids.append(block_id)
+                    p.changeVisualShape(body_id, -1, rgbaColor=color, physicsClientId=self.client)
+                    self.block_ids[block_idx]=body_id
                 except Exception as e:
                     logger.error(f"Error spawning block {block_idx}: {e}")
 
@@ -579,10 +578,10 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         attempts = 0
         max_attempts = 100 * num_required
 
-        avoid_xy = [[p[0], p[1]] for p in self.target_locations_pos]
+        avoid_xy = [[pos[0], pos[1]] for pos in self.target_locations_pos]
         if self.dump_location_pos:
             if isinstance(self.dump_location_pos[0], list):
-                avoid_xy += [[p[0], p[1]] for p in self.dump_location_pos]
+                avoid_xy += [[pos[0], pos[1]] for pos in self.dump_location_pos]
             else:
                 avoid_xy.append(self.dump_location_pos[:2])
 
@@ -657,21 +656,31 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 pass
             self.grasp_constraint_id = None
 
-        for body_list in [self.block_ids, self.target_ids]:
-            for body_id in body_list:
-                try:
-                    p.removeBody(body_id, physicsClientId=self.client)
-                except Exception:
-                    pass
+        for block_id in self.block_ids.values():
+            try:
+                p.removeBody(block_id, physicsClientId=self.client)
+            except Exception:
+                pass
 
-        self.block_ids = []
-        self.target_ids = []
+        for visual in self.target_ids.values():
+            try:
+                p.removeBody(visual["plate_id"], physicsClientId=self.client)
+            except Exception:
+                pass
+
+        self.block_ids = {}
+        self.target_ids = {}
 
     def _reset_robot_home(self):
         """Resets robot to home joint configuration and opens gripper."""
         if not hasattr(self, 'arm_joint_indices') or not self.arm_joint_indices:
             logger.warning("Skipping robot reset: joint indices not initialized.")
             return
+
+        print("Robot ID:", self.robot_id)
+        print("Num joints:", p.getNumJoints(self.robot_id))
+        for i in range(p.getNumJoints(self.robot_id)):
+            print(i, p.getJointInfo(self.robot_id, i)[1])
 
         # Reset arm joints
         for i, idx in enumerate(self.arm_joint_indices):
@@ -780,9 +789,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             self.last_failure_reason = "invalid_index"
             return False
 
-        block_id = self.block_ids[block_idx]
+        body_id = self.block_ids[block_idx]
         try:
-            block_pos, block_orn = p.getBasePositionAndOrientation(block_id, self.client)
+            block_pos, block_orn = p.getBasePositionAndOrientation(body_id, self.client)
         except Exception as e:
             logger.error(f"Failed to get block pose: {e}")
             self.last_failure_reason = "pose_fetch_failed"
@@ -797,11 +806,11 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             return False
 
         logger.info("Trying preferred grasp orientation")
-        if self._attempt_pick_sequence(block_id, block_idx, preferred):
+        if self._attempt_pick_sequence(body_id, block_idx, preferred):
             return True
 
         logger.info("Trying alternative grasp orientation")
-        if self._attempt_pick_sequence(block_id, block_idx, alternative):
+        if self._attempt_pick_sequence(body_id, block_idx, alternative):
             return True
 
         self.last_failure_reason = "both_orientations_failed"
@@ -866,11 +875,11 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         target_xy = np.array(target_pos[:2])
         radius_sq = (self.block_scale * 0.8) ** 2
 
-        for i, block_id in enumerate(self.block_ids):
-            if block_id == self.held_object_id:
+        for i, body_id in self.block_ids.items():
+            if body_id == self.held_object_id:
                 continue
             try:
-                other_xy = np.array(p.getBasePositionAndOrientation(block_id, self.client)[0][:2])
+                other_xy = np.array(p.getBasePositionAndOrientation(body_id, self.client)[0][:2])
                 if np.sum((target_xy - other_xy) ** 2) < radius_sq:
                     logger.warning(f"Target {target_idx} occupied by block {i}")
                     return False

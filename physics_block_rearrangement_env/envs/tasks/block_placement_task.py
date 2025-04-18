@@ -125,11 +125,11 @@ class BlockPlacementTask(BaseTask):
             if required_block_idx >= len(env.block_ids) or target_loc_idx >= len(env.target_locations_pos):
                 continue
 
-            block_id = env.block_ids[required_block_idx]
+            body_id = env.block_ids[required_block_idx]
             target_pos = env.target_locations_pos[target_loc_idx]
 
             try:
-                current_pos, _ = p.getBasePositionAndOrientation(block_id, physicsClientId=env.client)
+                current_pos, _ = p.getBasePositionAndOrientation(body_id, physicsClientId=env.client)
                 dist_xy = np.linalg.norm(np.array(current_pos[:2]) - np.array(target_pos[:2]))
                 on_surface = abs(current_pos[2] - (env.table_height + env.block_half_extents[2])) < 0.02
                 if dist_xy < self.goal_dist_threshold and on_surface:

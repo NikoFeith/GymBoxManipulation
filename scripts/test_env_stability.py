@@ -21,12 +21,12 @@ except ImportError:
 # --- Test Configuration ---
 ENV_ID = "PhysicsBlockRearrangement-v0"
 NUM_EPISODES = 50
-MAX_STEPS_PER_EPISODE = 200
+MAX_STEPS_PER_EPISODE = 10
 TASK_CONFIG_FILE = "place_3_line.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
-USE_GUI = False
+USE_GUI = True
 DISPLAY_WIDTH = 336   # Display size if VISUALIZE_OBS is True
 DISPLAY_HEIGHT = 336
 # ---------------------------
@@ -72,6 +72,8 @@ def run_stability_test():
         env_kwargs = {'use_gui': USE_GUI, 'render_mode': 'rgb_array'} # Must be rgb_array to get obs
         if TASK_CONFIG_FILE:
             env_kwargs['task_config_file'] = TASK_CONFIG_FILE
+
+        env_kwargs['max_episode_steps'] = MAX_STEPS_PER_EPISODE
 
         print("Creating environment (headless)...")
         env = gym.make(ENV_ID, **env_kwargs)
