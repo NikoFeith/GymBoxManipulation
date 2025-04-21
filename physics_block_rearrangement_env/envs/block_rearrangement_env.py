@@ -388,6 +388,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Pose tolerances
         self.pose_reached_threshold = sim_cfg.get("pose_reached_threshold", 0.01)
         self.orientation_reached_threshold = sim_cfg.get("orientation_reached_threshold", 0.1)
+        self.goal_dist_threshold = self.config.get("goal_dist_threshold", 0.04)
 
         # Rewards
         self.goal_reward = reward_cfg.get("goal_reward", 1.0)
@@ -414,19 +415,19 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         all_target = colors.get("target_rgba", default_target_colors)
 
         if self.num_blocks <= len(all_block):
-            self.block_colors_rgba = all_block[:self.num_blocks]
-            self.target_colors_rgba = all_target[:self.num_targets]
+            self.block_colors_rgba = all_block
+            self.target_colors_rgba = all_target
         else:
             logger.warning("Block count exceeds color list. Repeating colors.")
-            self.block_colors_rgba = (all_block * ((self.num_blocks // len(all_block)) + 1))[:self.num_blocks]
-            self.target_colors_rgba = (all_target * ((self.num_blocks // len(all_target)) + 1))[:self.num_blocks]
+            self.block_colors_rgba = (all_block * ((self.num_blocks // len(all_block)) + 1))
+            self.target_colors_rgba = (all_target * ((self.num_blocks // len(all_target)) + 1))
 
         logger.info("Colors loaded and sliced.")
 
     # endregion
 
     # region TASK HELPERS
-    def _generate_target_positions(self, layout: str) -> list:
+    def generate_target_positions(self, layout: str) -> list:
         """Generate 2D XY target positions in a line, circle, or random layout, with optional rotation and offset jitter."""
         task_cfg = self.config.get("task", {})
         target_offset = np.array(task_cfg.get("target_offset", [0.0, 0.0]))
@@ -493,7 +494,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         return positions
 
-    def _spawn_blocks_random_xy(self, num_blocks=None):
+    def spawn_blocks_random_xy(self, num_blocks=None):
         """
         Spawns all blocks at random XY positions within the defined spawn area.
         Z is fixed based on table height.
@@ -503,7 +504,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         self._spawn_blocks(num_blocks)
 
-    def _place_target_visuals(self):
+    def place_target_visuals(self):
         """Places visual markers (plates) at the target locations."""
         self.target_ids = {}
         if not hasattr(self, 'target_locations_pos') or not self.target_locations_pos:
@@ -519,7 +520,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         logger.debug(f"Goal Config for this episode: {self.goal_config}")
 
-        plate_half_extents = [0.04, 0.04, 0.0005]
+        plate_half_extents = [0.05, 0.05, 0.0005]
         plate_center_z = self.table_height + plate_half_extents[2] + 0.0001
 
         for target_idx, target_pos in enumerate(self.target_locations_pos):
@@ -621,6 +622,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     #region RESET / STEP
     def reset(self, seed=None, options=None):
         """Resets the environment, robot, and task scenario. Returns observation and info dict."""
+
         super().reset(seed=seed)
         self.current_steps = 0
         self.held_object_id = None
@@ -965,7 +967,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 self._recover_from_grasp_failure(grasp_ori)
                 return False
 
-            if not self._attach_constraint(block_id, grasp_ori):
+            if not self._attach_constraint(block_id):
                 self._recover_from_grasp_failure(grasp_ori)
                 return False
 
@@ -1011,7 +1013,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self._set_gripper_state("open", wait=True)
         self._move_to_home_pose()
 
-    def _attach_constraint(self, block_id, grasp_ori):
+    def _attach_constraint(self, block_id):
         """Creates a fixed joint between EE and block."""
         try:
             ee_pos, ee_ori = self._get_ee_pose()
@@ -1240,6 +1242,33 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # endregion
 
     # region RL HELPER
+    def get_state(self) -> dict:
+        """Returns a mapping from block index to the target it's currently on ('dump' or None otherwise)."""
+        state = {}
+        for block_idx, body_id in self.block_ids.items():
+            try:
+                block_pos, _ = p.getBasePositionAndOrientation(body_id, physicsClientId=self.client)
+                block_xy = np.array(block_pos[:2])
+                block_z = block_pos[2]
+            except Exception:
+                state[block_idx] = None
+                continue
+
+            # Check if it's on any target
+            matched = False
+            for target_idx, target_pos in enumerate(self.target_locations_pos):
+                dist_xy = np.linalg.norm(block_xy - np.array(target_pos[:2]))
+                on_surface = abs(block_z - (self.table_height + self.block_half_extents[2])) < 0.02
+                if dist_xy < self.goal_dist_threshold and on_surface:
+                    state[block_idx] = target_idx
+                    matched = True
+                    break
+
+            if not matched:
+                # Optionally check dumps here if needed
+                state[block_idx] = None
+
+        return state
 
     def _get_obs(self):
         """Returns an RGB image observation with the robot hidden from view."""

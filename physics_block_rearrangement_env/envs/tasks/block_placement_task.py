@@ -22,7 +22,6 @@ class BlockPlacementTask(BaseTask):
         self.num_blocks = self.config.get("num_blocks", 2)
         self.num_targets = self.config.get("num_targets", 2)
         self.num_locations = self.num_blocks
-        self.goal_dist_threshold = self.config.get("goal_dist_threshold", 0.04)
         self.spawn_bounds_relative = self.config.get("spawn_bounds_relative", [0.0, 0.25, -0.20, -0.05]) # [minX, maxX, minY, maxY] relative to table center
 
 
@@ -94,7 +93,7 @@ class BlockPlacementTask(BaseTask):
 
         # --- 1. Define target positions ---
         layout = env.target_layout  # Must be loaded from config earlier
-        env.target_locations_pos = env._generate_target_positions(layout)
+        env.target_locations_pos = env.generate_target_positions(layout)
 
         # --- 2. Define dump positions ---
         env.dump_location_pos = self._generate_non_overlapping_dump_positions(num_dumps=env.num_dump_locations)
@@ -105,39 +104,25 @@ class BlockPlacementTask(BaseTask):
         logger.debug(f'Goal config updated with: {env.goal_config}')
 
         # --- 4. Spawn target visuals ---
-        env._place_target_visuals()  # You must implement this if not already there
+        env.place_target_visuals()  # You must implement this if not already there
 
         # --- 5. Spawn blocks ---
-        env._spawn_blocks_random_xy()  # Existing method
+        env.spawn_blocks_random_xy()  # Existing method
 
         return {"goal_mapping": env.goal_config}
 
     def check_goal(self) -> bool:
         env = self.env
-        if env.held_object_id is not None: return False
-        if not env.goal_config: return False
+        if env.held_object_id is not None or not env.goal_config:
+            return False
 
-        on_target_count = 0
-        for target_loc_idx, required_block_idx in env.goal_config.items():
-            if required_block_idx is None:
-                continue  # skip unassigned targets
-
-            if required_block_idx >= len(env.block_ids) or target_loc_idx >= len(env.target_locations_pos):
+        current = env.get_state()
+        for target_idx, block_idx in env.goal_config.items():
+            if block_idx is None:
                 continue
-
-            body_id = env.block_ids[required_block_idx]
-            target_pos = env.target_locations_pos[target_loc_idx]
-
-            try:
-                current_pos, _ = p.getBasePositionAndOrientation(body_id, physicsClientId=env.client)
-                dist_xy = np.linalg.norm(np.array(current_pos[:2]) - np.array(target_pos[:2]))
-                on_surface = abs(current_pos[2] - (env.table_height + env.block_half_extents[2])) < 0.02
-                if dist_xy < self.goal_dist_threshold and on_surface:
-                    on_target_count += 1
-            except Exception:
+            if current.get(block_idx) != target_idx:
                 return False
-
-        return on_target_count == sum(1 for b in env.goal_config.values() if b is not None)
+        return True
 
     def _generate_goal_config(self, mapping_type: str = "random") -> dict:
         """
