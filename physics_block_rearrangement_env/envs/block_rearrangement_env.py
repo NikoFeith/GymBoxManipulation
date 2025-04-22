@@ -724,7 +724,13 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.current_steps += 1
 
         terminated = self.task.check_goal()
-        truncated = self.current_steps >= self.max_steps or self._goal_blocks_fell()
+        truncated = False
+        if self.current_steps >= self.max_steps:
+            truncated = True
+            logger.warning("[ENV] Truncated due to step limit")
+        elif self._goal_blocks_fell():
+            truncated = True
+            logger.error("[ENV] Truncated due to ...")
 
         reward = self.goal_reward if terminated else self.step_penalty
         if not success:
