@@ -22,7 +22,7 @@ except ImportError:
 ENV_ID = "PhysicsBlockRearrangement-v0"
 NUM_EPISODES = 50
 MAX_STEPS_PER_EPISODE = 10
-TASK_CONFIG_FILE = "place_2_3_targets.yaml" # Use default task
+TASK_CONFIG_FILE = "place_3_line.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
