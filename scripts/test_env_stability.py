@@ -20,13 +20,14 @@ except ImportError:
 
 # --- Test Configuration ---
 ENV_ID = "PhysicsBlockRearrangement-v0"
-NUM_EPISODES = 50
-MAX_STEPS_PER_EPISODE = 10
+NUM_EPISODES = 5000
+MAX_STEPS_PER_EPISODE = 100
 TASK_CONFIG_FILE = "place_3_line.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
 USE_GUI = True
+RENDER_EVERY = 10  # ← render every 10 episodes
 DISPLAY_WIDTH = 336   # Display size if VISUALIZE_OBS is True
 DISPLAY_HEIGHT = 336
 # ---------------------------

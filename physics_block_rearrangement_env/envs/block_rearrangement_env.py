@@ -1319,4 +1319,33 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         """
         return {"held_object_idx": self.held_object_idx}
 
+    def debug_save_if_multi_blocks_moving(self, episode: int = 0, threshold: float = 0.005,
+                                          save_path: str = "./debug_saves"):
+        """
+        Manually call this to check if multiple blocks are moving and save a .bullet file if so.
+        Args:
+            episode (int): Current episode number (for filename)
+            threshold (float): Linear velocity magnitude threshold
+            save_path (str): Where to store the .bullet file
+        """
+        if not hasattr(self, "block_ids") or not self.block_ids:
+            return
+
+        moving_blocks = 0
+        for block_id in self.block_ids.values():
+            try:
+                lin_vel, _ = p.getBaseVelocity(block_id, self.client)
+                if np.linalg.norm(lin_vel) > threshold:
+                    moving_blocks += 1
+            except Exception:
+                continue
+
+        if moving_blocks > 1:
+            logger.warning(f"[DEBUG] {moving_blocks} blocks are moving! Saving state.")
+            os.makedirs(save_path, exist_ok=True)
+            filename = f"anomaly_ep{episode:03d}.bullet"
+            full_path = os.path.join(save_path, filename)
+            p.saveBullet(full_path, physicsClientId=self.client)
+            logger.info(f"[DEBUG] Saved .bullet snapshot: {full_path}")
+
     # endregion
