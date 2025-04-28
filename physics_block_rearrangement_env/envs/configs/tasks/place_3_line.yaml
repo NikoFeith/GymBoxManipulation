@@ -6,7 +6,7 @@ task:
   num_targets: 3
   num_dump_locations: 1
   target_pattern: 'line_y'
-  target_spacing: 0.25
+  target_spacing: 0.15
   target_offset: [0.0, 0.0]
   spawn_bounds_relative: [-0.2, 0.2, -0.2, 0.2]
   dump_base_pos: [0.0, -0.25]
