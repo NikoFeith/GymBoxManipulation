@@ -6,7 +6,7 @@ task:
   num_targets: 4
   num_dump_locations: 1
   allow_stacking: false
-  target_layout: 'line'
+  target_layout: 'circle'
   target_circle_radius: 0.15
   target_offset: [0.0, 0.0]
   spawn_bounds_relative: [-0.2, 0.2, -0.2, 0.2]
