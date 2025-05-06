@@ -8,6 +8,7 @@ import os
 import re
 from pathlib import Path
 import yaml
+from colorsys import hsv_to_rgb
 import cv2
 
 from physics_block_rearrangement_env.utils.robot_utils import *
@@ -383,10 +384,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.step_penalty = reward_cfg.get("step_penalty", -0.01)
         self.move_fail_penalty = reward_cfg.get("move_fail_penalty", 0.005)
 
+    from colorsys import hsv_to_rgb
+
     def _load_colors(self):
         """
-        Assigns RGBA colors to blocks and targets from config.
-        Falls back to defaults if not specified.
+        Loads or generates a consistent RGBA color palette for blocks and targets.
+        Allows config override, otherwise uses evenly spaced HSV palette.
         """
         colors = self.config.get("colors", {})
 
@@ -399,18 +402,31 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             [0.9, 0.9, 0.5, 1.0], [0.9, 0.5, 0.9, 1.0]
         ]
 
-        all_block = colors.get("block_rgba", default_block_colors)
-        all_target = colors.get("target_rgba", default_target_colors)
+        def generate_colors(n, light=False, alpha=1.0):
+            s = 0.6 if light else 1.0
+            v = 1.0 if light else 0.8
+            return [
+                list(hsv_to_rgb(i / n, s, v)) + [alpha]
+                for i in range(n)
+            ]
 
-        if self.num_blocks <= len(all_block):
-            self.block_colors_rgba = all_block
-            self.target_colors_rgba = all_target
+        max_count = colors.get("max_count", 10)
+
+        if not colors.get("random_color"):
+            block_colors = colors.get("block_rgba", default_block_colors)
+            target_colors = colors.get("target_rgba", default_target_colors)
         else:
-            logger.warning("Block count exceeds color list. Repeating colors.")
-            self.block_colors_rgba = (all_block * ((self.num_blocks // len(all_block)) + 1))
-            self.target_colors_rgba = (all_target * ((self.num_blocks // len(all_target)) + 1))
+            block_colors = generate_colors(max_count, light=False, alpha=0.4)
+            target_colors = generate_colors(max_count, light=True, alpha=1.0)
 
-        logger.info("Colors loaded and sliced.")
+        self.raw_block_colors = block_colors.copy()
+        self.raw_target_colors = target_colors.copy()
+
+        self.block_colors_rgba = block_colors
+        self.target_colors_rgba = target_colors
+
+        logger.info(
+            f"Generated {len(self.block_colors_rgba)} block colors and {len(self.target_colors_rgba)} target colors.")
 
     # endregion
 
@@ -576,6 +592,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Let objects settle
         wait_steps(150, client=self.client, timestep=self.timestep, use_gui=self.use_gui)
 
+        # Random color permutation to avoid ID-color overfitting
+        perm = np.random.permutation(len(self.block_colors_rgba))
+
+        self.block_colors_rgba = [self.raw_block_colors[i] for i in perm]
+        self.target_colors_rgba = [self.raw_target_colors[i] for i in perm]
+
         # --- Visualize ---
         self._place_target_visuals(task_info["target_field_ids"])
         self._spawn_blocks(task_info["block_field_ids"])
@@ -652,12 +674,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         block_id = fields[field_from_id]["block_id"]
         if block_id is None:
             logger.warning(f"Pick failed: no block at field {field_from_id}")
-            return self._get_obs(), self.step_penalty, False, False, {"error": "empty_pick"}
+            return self._get_obs(), self.step_penalty, False, False, {"failed": "empty_pick"}
 
         if fields[field_to_id]["block_id"] is not None:
             logger.warning(f"Place failed: target field {field_to_id} already occupied")
             return self._get_obs(), self.step_penalty + self.move_fail_penalty, False, False, {
-                "error": "occupied_target"}
+                "failed": "occupied_target"}
 
         # === Try pick ===
         success_pick = self._primitive_pick(block_id)
