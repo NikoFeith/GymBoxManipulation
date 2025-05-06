@@ -22,11 +22,11 @@ except ImportError:
 ENV_ID = "PhysicsBlockRearrangement-v0"
 NUM_EPISODES = 5000
 MAX_STEPS_PER_EPISODE = 100
-TASK_CONFIG_FILE = "place_easy.yaml" # Use default task
+TASK_CONFIG_FILE = "place_very_easy.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
-USE_GUI = True
+USE_GUI = False
 RENDER_EVERY = 10  # ← render every 10 episodes
 DISPLAY_WIDTH = 336   # Display size if VISUALIZE_OBS is True
 DISPLAY_HEIGHT = 336

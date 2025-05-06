@@ -416,8 +416,8 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             block_colors = colors.get("block_rgba", default_block_colors)
             target_colors = colors.get("target_rgba", default_target_colors)
         else:
-            block_colors = generate_colors(max_count, light=False, alpha=0.4)
-            target_colors = generate_colors(max_count, light=True, alpha=1.0)
+            block_colors = generate_colors(max_count, light=False)
+            target_colors = generate_colors(max_count, light=True)
 
         self.raw_block_colors = block_colors.copy()
         self.raw_target_colors = target_colors.copy()
