@@ -63,27 +63,9 @@ class BaseTask(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def define_spawn_area(self) -> list[float]:
+    def setup_field_grid(self):
         """
-        Define the rectangular bounds [min_x, max_x, min_y, max_y] for spawning blocks.
-        Coordinates are relative to the world frame.
-
-        Returns:
-            list[float]: A list containing [min_x, max_x, min_y, max_y].
+        Sets up a structured grid with slight randomization in rotation and translation.
+        Populates self.fields dictionary with positions.
         """
         raise NotImplementedError
-
-    # --- Optional Methods for more advanced tasks ---
-    # def compute_reward(self, previous_state_info, current_state_info, action_info) -> float:
-    #     """Calculate task-specific rewards beyond simple step penalty/goal reward."""
-    #     # Default could just return self.env.step_penalty or self.env.goal_reward
-    #     pass
-
-    # def get_task_observation(self) -> np.ndarray | dict:
-    #     """Provide task-specific elements to add to the environment observation."""
-    #     # Could return goal information, relative poses etc.
-    #     pass
-
-    # def step_curriculum(self, episode_success_rate: float):
-    #     """Adjust task difficulty based on performance (e.g., increase num_blocks)."""
-    #     pass

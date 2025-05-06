@@ -28,7 +28,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
 
     def __init__(self, render_mode=None, use_gui=False,
-                 task_config_file="place_4_line.yaml",
+                 task_config_file="place_easy.yaml",
                  base_config_file="base_config.yaml"):
         super().__init__()
 
@@ -51,12 +51,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self._load_robot()
         self._initialize_robot_joints()
 
-        # --- Load task logic (e.g. placement, stacking) ---
-        self._load_and_instantiate_task(tasks, BaseTask)
-
         # --- Load task-specific parameters ---
         self._load_task_settings()
         self._load_colors()
+
+        # --- Load task logic (e.g. placement) ---
+        self._load_and_instantiate_task(tasks, BaseTask)
 
         # --- Setup Gym RL interface ---
         self._setup_action_space()
@@ -70,16 +70,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.goal_config = {}
         self.block_ids = {}            # IDs of active block objects
         self.target_ids = {}           # IDs of active target visuals
-        self.target_locations_pos = [] # Will be filled on reset
-        self.dump_location_pos = []    # Will be filled on reset
-
-        # Compute absolute dump location offset from config + table start position
-        dump_base = self.config.get("task", {}).get("dump_base_pos", [-0.05, 0.0])
-        self._dump_location_base_pos = [
-            dump_base[0] + self.table_start_pos[0],
-            dump_base[1] + self.table_start_pos[1],
-            self.table_height + 0.01
-        ]
+        self.fields = {}
 
         logger.info("Environment initialized.")
 
@@ -358,7 +349,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Pull some task-defined values into env
         self.num_blocks = self.task.num_blocks
         self.num_targets = getattr(self.task, "num_targets", self.num_blocks)
-        self.num_dump_locations = getattr(self.task, "num_dump_locations", 1)
 
     def _load_task_settings(self):
         """
@@ -371,8 +361,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.target_layout = task_cfg.get("target_layout", "line")
         self.num_blocks = task_cfg.get("num_blocks", 1)
         self.num_targets = task_cfg.get("num_targets", 1)
-        self.num_dump_locations = task_cfg.get("num_dump_locations", 1)
-        self.allow_stacking = task_cfg.get("allow_stacking", False)
 
         self.block_scale = task_cfg.get("block_scale", 0.05)
         self.block_half_extents = [self.block_scale / 2.0] * 3
@@ -427,184 +415,129 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # endregion
 
     # region TASK HELPERS
-    def generate_target_positions(self, layout: str) -> list:
-        """Generate 2D XY target positions in a line, circle, or random layout, with optional rotation and offset jitter."""
-        task_cfg = self.config.get("task", {})
-        target_offset = np.array(task_cfg.get("target_offset", [0.0, 0.0]))
-        target_position_randomization = task_cfg.get("target_position_randomization", True)
-
-        if target_position_randomization:
-            # Add slight positional jitter
-            target_offset += np.array([
-                self.np_random.uniform(0, 0.05),
-                self.np_random.uniform(0, 0.05)
-            ])
-            # Create rotation matrix with random angle
-            theta = self.np_random.uniform(0, 2 * np.pi)
-            target_rotation = np.array([
-                [np.cos(theta), -np.sin(theta)],
-                [np.sin(theta), np.cos(theta)]
-            ])
-        else:
-            target_rotation = np.eye(2)  # identity matrix, no rotation
-
-        base = np.array(self.table_start_pos[:2])
-        positions = {}
-        z = self.table_height + self.block_half_extents[2] + 0.01
-
-        if layout == "line":
-            spacing = task_cfg.get("target_spacing", 0.15)
-            offset = -((self.num_targets - 1) / 2.0) * spacing
-            for target_idx in range(self.num_targets):
-                pos_xy = np.array([
-                    base[0] + target_offset[0],
-                    base[1] + target_offset[1] + offset + target_idx * spacing
-                ])
-                positions[target_idx] = [pos_xy[0], pos_xy[1], z]
-
-        elif layout == "circle":
-            radius = task_cfg.get("target_circle_radius", 0.2)
-            for target_idx in range(self.num_targets):
-                angle = 2 * np.pi * target_idx / self.num_targets
-                pos_xy = np.array([
-                    base[0] + target_offset[0] + radius * np.cos(angle),
-                    base[1] + target_offset[1] + radius * np.sin(angle)
-                ])
-                positions[target_idx] = [pos_xy[0], pos_xy[1], z]
-
-        elif layout == "random":
-            radius = task_cfg.get("target_circle_radius", 0.2)
-            for target_idx in range(self.num_targets):
-                pos_xy = np.array([
-                    base[0] + target_offset[0] + self.np_random.uniform(-radius, radius),
-                    base[1] + target_offset[1] + self.np_random.uniform(-radius, radius)
-                ])
-                positions[target_idx] = [pos_xy[0], pos_xy[1], z]
-
-        else:
-            raise ValueError(f"Unknown target layout: {layout}")
-
-        # --- Apply rotation around center of positions (if enabled) ---
-        if target_position_randomization:
-            xy = np.array([pos[:2] for pos in positions.values()])
-            z_vals = [pos[2] for pos in positions.values()]
-            center = np.mean(xy, axis=0)
-            rotated_xy = (xy - center) @ target_rotation.T + center
-            positions = [[x, y, z_vals[i]] for i, (x, y) in enumerate(rotated_xy)]
-
-        return positions
-
-    def spawn_blocks_random_xy(self, num_blocks=None):
+    def get_block_at_position(self, position, threshold=0.03):
         """
-        Spawns all blocks at random XY positions within the defined spawn area.
-        Z is fixed based on table height.
+        Returns the block ID at a given (x, y, z) position, or None if no match is found.
         """
-        if num_blocks is None:
-            num_blocks = self.num_blocks
+        for block_id in self.block_ids.values():
+            pos, _ = p.getBasePositionAndOrientation(block_id, physicsClientId=self.client)
+            if np.linalg.norm(np.array(pos[:2]) - np.array(position[:2])) <= threshold:
+                return block_id
+        return None
 
-        self._spawn_blocks(num_blocks)
-
-    def place_target_visuals(self):
-        """Places visual markers (plates) at the target locations."""
+    def _place_target_visuals(self, target_field_ids):
+        """Places visual markers (plates) at the field locations assigned to targets."""
         self.target_ids = {}
-        if not hasattr(self, 'target_locations_pos') or not self.target_locations_pos:
-            logger.warning("Warning: Target locations not defined, cannot place visuals.")
+
+        if not hasattr(self, "fields") or not self.fields:
+            logger.warning("Warning: Field data not available, cannot place target visuals.")
             return
 
-        if not hasattr(self, 'goal_config') or not self.goal_config:
+        if not hasattr(self, "goal_config") or not self.goal_config:
             logger.warning("Warning: Goal config not defined, cannot place visuals.")
             self.close()
             return
 
-        logger.debug(f"Placing {len(self.target_locations_pos)} target visuals...")
-
+        logger.debug(f"Placing {len(target_field_ids)} target visuals...")
         logger.debug(f"Goal Config for this episode: {self.goal_config}")
 
         plate_half_extents = [0.05, 0.05, 0.0005]
         plate_center_z = self.table_height + plate_half_extents[2] + 0.0001
 
-        for target_idx, target_pos in enumerate(self.target_locations_pos):
+        for target_idx, field_id in enumerate(target_field_ids):
+            if field_id not in self.fields:
+                logger.warning(f"Field ID {field_id} not found in fields. Skipping.")
+                continue
+
+            target_pos = self.fields[field_id]["position"]
+            target_ori = p.getQuaternionFromEuler([0, 0, self.task.grid_rotation_rad])
+
             # Default to gray if no color can be assigned
-            if target_idx != -1:
-                rgba = self.target_colors_rgba[target_idx % len(self.target_colors_rgba)]
-            else:
-                rgba = [0.5, 0.5, 0.5, 0.5]  # semi-transparent gray fallback
+            rgba = self.target_colors_rgba[target_idx % len(self.target_colors_rgba)] if target_idx != -1 else [0.5,
+                                                                                                                0.5,
+                                                                                                                0.5,
+                                                                                                                0.5]
 
             try:
                 vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=plate_half_extents,
                                              rgbaColor=rgba, physicsClientId=self.client)
-                plate_id = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=-1,
-                                             baseVisualShapeIndex=vis_id,
-                                             basePosition=[target_pos[0], target_pos[1], plate_center_z],
-                                             baseOrientation=[0, 0, 0, 1], physicsClientId=self.client)
+                plate_id = p.createMultiBody(
+                    baseMass=0,
+                    baseCollisionShapeIndex=-1,
+                    baseVisualShapeIndex=vis_id,
+                    basePosition=[target_pos[0], target_pos[1], plate_center_z],
+                    baseOrientation=target_ori,
+                    physicsClientId=self.client
+                )
                 if plate_id >= 0:
-                    self.target_ids[target_idx] = {'plate_id':plate_id, 'vis_id': vis_id}
+                    self.target_ids[target_idx] = {'plate_id': plate_id, 'vis_id': vis_id}
                 else:
-                    logger.warning(f"Failed to create visual for target {target_idx}")
+                    logger.warning(f"Failed to create visual for target field {field_id} (plate_id < 0)")
             except Exception as e:
-                logger.exception(f"Error creating target plate {target_idx}: {e}")
+                logger.exception(f"Error creating target plate at field {field_id}: {e}")
 
-    def _spawn_blocks(self, num_blocks):
-        """Spawns URDF cubes in valid positions avoiding targets and dumps."""
+    def _spawn_blocks(self, block_field_ids):
+        """Spawns blocks at the field positions assigned during reset, coloring them to match their goal target."""
+        if not hasattr(self, "fields") or not self.fields:
+            logger.warning("Warning: Field data not available, cannot spawn blocks.")
+            return
+
         self.block_ids = {}
-        logger.debug(f"Spawning {num_blocks} blocks...")
+        logger.debug(f"Spawning {len(block_field_ids)} blocks...")
 
-        valid_positions = self._get_valid_spawn_positions(num_blocks)
-        if len(valid_positions) < num_blocks:
-            raise RuntimeError("Not enough valid positions to spawn blocks.")
+        # Build mapping: block_id → target_id (from goal_config)
+        block_to_target_id = {block_id: target_id for target_id, block_id in self.goal_config.items()}
 
-        for target_idx, block_idx in self.goal_config.items():
-            if block_idx is not None:
-                xy = valid_positions[block_idx]
-                z = self.table_height + self.block_half_extents[2] + 0.001
-                pos = [xy[0], xy[1], z]
-                orn = p.getQuaternionFromEuler([0, 0, self.np_random.uniform(0, 2 * np.pi)])
+        # Track used and unused target_ids
+        used_target_ids = set(block_to_target_id.values())
+        all_target_ids = set(range(len(self.block_colors_rgba)))
+        unused_target_ids = list(all_target_ids - used_target_ids)
+        unused_color_cycle = iter(unused_target_ids) if unused_target_ids else iter([0])
 
-                try:
-                    body_id = p.loadURDF("cube.urdf", pos, orn,
-                                          globalScaling=self.block_scale,
-                                          physicsClientId=self.client)
+        for field_id in block_field_ids:
+            if field_id not in self.fields:
+                logger.warning(f"Field ID {field_id} not found in fields. Skipping block spawn.")
+                continue
 
-                    color = self.block_colors_rgba[target_idx % len(self.block_colors_rgba)]
-                    p.changeVisualShape(body_id, -1, rgbaColor=color, physicsClientId=self.client)
-                    self.block_ids[block_idx]=body_id
-                except Exception as e:
-                    logger.error(f"Error spawning block {block_idx}: {e}")
+            block_idx = self.fields[field_id]["block_id"]
+            pos = self.fields[field_id]["position"]
+            z = self.table_height + self.block_half_extents[2] + 0.001
+            pos_with_z = (pos[0], pos[1], z)
+            orn = p.getQuaternionFromEuler([0, 0, np.random.uniform(0, 2 * np.pi)])
 
-    def _get_valid_spawn_positions(self, num_required):
-        """Generates non-overlapping positions for spawning blocks."""
-        bounds = self.task.define_spawn_area()
-        min_dist_sq = (self.block_scale * 1.5) ** 2
-        positions = []
-        attempts = 0
-        max_attempts = 100 * num_required
+            try:
+                body_id = p.loadURDF("cube.urdf", pos_with_z, orn,
+                                     globalScaling=self.block_scale,
+                                     physicsClientId=self.client)
+                if body_id >= 0:
+                    self.block_ids[block_idx] = body_id
 
-        avoid_xy = [[pos[0], pos[1]] for pos in self.target_locations_pos]
-        if self.dump_location_pos:
-            if isinstance(self.dump_location_pos[0], list):
-                avoid_xy += [[pos[0], pos[1]] for pos in self.dump_location_pos]
-            else:
-                avoid_xy.append(self.dump_location_pos[:2])
+                    # Determine color: goal-matched or fallback from unused target colors
+                    target_id = block_to_target_id.get(block_idx, None)
+                    if target_id is not None:
+                        rgba = self.block_colors_rgba[target_id % len(self.block_colors_rgba)]
+                    else:
+                        try:
+                            fallback_id = next(unused_color_cycle)
+                        except StopIteration:
+                            fallback_id = 0
+                        rgba = self.block_colors_rgba[fallback_id % len(self.block_colors_rgba)]
+                        logger.debug(f"Assigned fallback color {rgba} to distractor block {block_idx}")
 
-        while len(positions) < num_required and attempts < max_attempts:
-            x = self.np_random.uniform(bounds[0], bounds[1])
-            y = self.np_random.uniform(bounds[2], bounds[3])
-            candidate = [x, y]
-            attempts += 1
-
-            too_close = any(np.sum((np.array(candidate) - np.array(other)) ** 2) < min_dist_sq
-                            for other in positions + avoid_xy)
-            if not too_close:
-                positions.append(candidate)
-
-        return positions
+                    p.changeVisualShape(body_id, -1, rgbaColor=rgba, physicsClientId=self.client)
+                    logger.debug(f"Spawned block {block_idx} at field {field_id}, color={rgba}")
+                else:
+                    logger.warning(f"Failed to spawn block {block_idx} at field {field_id} (body_id < 0)")
+            except Exception as e:
+                logger.exception(f"Error spawning block {block_idx} at field {field_id}: {e}")
 
     # endregion
 
     # region RL INTERFACE SETUP
     def _setup_action_space(self):
-        """Defines the discrete action space for pick/place/dump actions."""
-        self.action_space = spaces.MultiDiscrete([self.num_blocks, self.num_targets + self.num_dump_locations])
+        """Defines the discrete action space for pick/place actions."""
+        num_fields = self.task.grid_size[0] * self.task.grid_size[1]
+        self.action_space = spaces.MultiDiscrete([num_fields, num_fields])
         logger.info(f"Action space = MultiDiscrete({self.action_space.shape})")
 
     def _setup_observation_space(self):
@@ -621,25 +554,31 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     #region RESET / STEP
     def reset(self, seed=None, options=None):
-        """Resets the environment, robot, and task scenario. Returns observation and info dict."""
-
         super().reset(seed=seed)
+
         self.current_steps = 0
         self.held_object_id = None
         self.held_object_idx = None
+        self.grasp_constraint_id = None
         self.goal_config = {}
 
         self._clear_sim_objects()
         self._reset_robot_home()
 
+        # --- Ask task for scenario setup ---
         if self.task is None:
             raise RuntimeError("Task was not initialized before reset.")
 
-        # Delegate scenario reset to the task
         task_info = self.task.reset_task_scenario()
+        self.fields = task_info["fields"]
+        self.goal_config = task_info["goal_config"]
 
         # Let objects settle
         wait_steps(150, client=self.client, timestep=self.timestep, use_gui=self.use_gui)
+
+        # --- Visualize ---
+        self._place_target_visuals(task_info["target_field_ids"])
+        self._spawn_blocks(task_info["block_field_ids"])
 
         # Initial observation and info
         obs = self._get_obs()
@@ -696,49 +635,58 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         wait_steps(50, client=self.client, timestep=self.timestep, use_gui=self.use_gui)
 
     def step(self, action):
-        """Executes one action primitive and returns (obs, reward, terminated, truncated, info)."""
-        block_idx, location_idx = action
+        """Executes one action using (field_from_id, field_to_id) instead of (block_id, target_id)."""
+        field_from_id, field_to_id = action
+        self.current_steps += 1
 
-        # Always begin by dropping anything we're holding
+        # Reset any grasped object from previous step
         if self.held_object_id is not None:
             self._reset_grasp_state()
 
-        # Step 1: Try to grasp the requested block
-        success_pick = self._primitive_pick(block_idx)
+        # === Access field info ===
+        fields = self.task.fields
+        if field_from_id not in fields or field_to_id not in fields:
+            logger.warning(f"Invalid field ids: {field_from_id} → {field_to_id}")
+            return self._get_obs(), self.step_penalty, False, False, {"error": "invalid_fields"}
 
-        # Step 2: If grasp succeeded, try to place at target or dump
+        block_id = fields[field_from_id]["block_id"]
+        if block_id is None:
+            logger.warning(f"Pick failed: no block at field {field_from_id}")
+            return self._get_obs(), self.step_penalty, False, False, {"error": "empty_pick"}
+
+        if fields[field_to_id]["block_id"] is not None:
+            logger.warning(f"Place failed: target field {field_to_id} already occupied")
+            return self._get_obs(), self.step_penalty + self.move_fail_penalty, False, False, {
+                "error": "occupied_target"}
+
+        # === Try pick ===
+        success_pick = self._primitive_pick(block_id)
+
+        # === Try place if pick succeeded ===
+        success_place = False
         if success_pick:
-            success_place = self._primitive_place(location_idx)
-        else:
-            success_place = False
+            success_place = self._primitive_place(field_to_id)
 
-        # Final result counts as success only if both pick & place succeeded
+            if success_place:
+                self.task.move_block_between_fields(block_id, field_from_id, field_to_id)
+
+        # === Success & termination ===
         success = success_pick and success_place
-
-        # Force drop if stuck with something
-        if self.held_object_id is not None and not success:
-            logger.warning("Force-dropping held object after failed place.")
-            self._reset_grasp_state()
-
-        obs = self._get_obs()
-        self.current_steps += 1
-
         terminated = self.task.check_goal()
-        truncated = False
-        if self.current_steps >= self.max_steps:
-            truncated = True
-            logger.warning("[ENV] Truncated due to step limit")
-        elif self._goal_blocks_fell():
-            truncated = True
-            logger.error("[ENV] Truncated due to ...")
+        truncated = False  # Add max_steps logic if needed
 
+        # === Reward logic ===
         reward = self.goal_reward if terminated else self.step_penalty
         if not success:
             reward += self.move_fail_penalty
 
-        info = self._get_info()
-        info["primitive_success"] = success
-        return obs, reward, terminated, truncated, info
+        info = {
+            "primitive_success": success,
+            "pick_success": success_pick,
+            "place_success": success_place,
+        }
+
+        return self._get_obs(), reward, terminated, truncated, info
 
     def _goal_blocks_fell(self):
         """Returns True if a goal-relevant block is below the table."""
@@ -819,59 +767,54 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.last_failure_reason = "both_orientations_failed"
         return False
 
-    def _primitive_place(self, location_idx):
-        """Handles placing at a target or dump location."""
-        if location_idx < 0:
-            logger.warning(f"Place failed: negative index {location_idx}")
-            self.last_failure_reason = "negative_place_index"
-            return False
+    def _primitive_place(self, field_id):
+        """
+        Places the currently held object at the position of the given field ID.
 
+        Args:
+            field_id: ID of the field in self.task.fields to place the object onto.
+
+        Returns:
+            True if placement succeeded, False otherwise.
+        """
         if self.held_object_id is None:
             logger.warning("Place failed: nothing is held.")
-            self.last_failure_reason = "place_nothing_held"
             return False
 
-        num_dumps = self.action_space.nvec[1] - self.num_targets
-        is_dump = location_idx < num_dumps
-
-        if is_dump:
-            loc_type = "dump"
-            target_pos = self._get_dump_location(location_idx)
-        else:
-            target_idx = location_idx - num_dumps
-            loc_type = "target"
-            target_pos = self._get_target_location(target_idx)
-
-        if target_pos is None:
-            logger.warning(f"Place failed: invalid {loc_type} index {location_idx}")
-            self.last_failure_reason = f"place_invalid_{loc_type}_index"
+        if field_id not in self.task.fields:
+            logger.warning(f"Place failed: field ID {field_id} not found.")
             return False
 
-        if not self.allow_stacking:
-            is_occupied = self._check_target_clear(location_idx, target_pos)
-            if is_dump and not is_occupied:
-                logger.warning("Dump location already occupied.")
-                self.last_failure_reason = "dump_overflow"
-                return False
-            elif not is_occupied:
-                logger.warning("Target location already occupied.")
-                self.last_failure_reason = "place_target_occupied"
-                return False
+        place_position = self.task.fields[field_id]["position"]
+        pre_z = self.table_height + self.z_hover_offset
+        place_z = self.table_height + self.place_clearance_above_top
+        target_ori = p.getQuaternionFromEuler([np.pi, 0, 0])  # standard downward grip
 
-        success = self._place_sequence(loc_type, location_idx, target_pos)
-        if not success:
-            self.last_failure_reason = "place_sequence_failed"
-        return success
+        pre_pose = [place_position[0], place_position[1], pre_z]
+        place_pose = [place_position[0], place_position[1], place_z]
 
-    def _get_target_location(self, idx):
-        if hasattr(self, 'target_locations_pos') and idx < len(self.target_locations_pos):
-            return self.target_locations_pos[idx]
-        return None
+        # Move above the target field
+        if not self._move_ee_to_pose(pre_pose, target_ori):
+            return False
 
-    def _get_dump_location(self, idx):
-        if hasattr(self, 'dump_location_pos') and idx < len(self.dump_location_pos):
-            return self.dump_location_pos[idx]
-        return None
+        # Move down to place
+        self._move_ee_to_pose(place_pose, target_ori)
+
+        # Release grasp
+        if self.grasp_constraint_id is not None:
+            try:
+                p.removeConstraint(self.grasp_constraint_id, self.client)
+            except Exception:
+                pass
+            self.grasp_constraint_id = None
+
+        self._set_gripper_state("open", wait=True)
+        self.held_object_id = None
+        self.held_object_idx = None
+
+        # Lift after placing
+        self._move_ee_to_pose(pre_pose, target_ori)
+        return True
 
     def _check_target_clear(self, target_idx, target_pos):
         """Checks if another block is already occupying the target location."""
@@ -1249,31 +1192,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
     # region RL HELPER
     def get_state(self) -> dict:
-        """Returns a mapping from block index to the target it's currently on ('dump' or None otherwise)."""
+        """Returns a mapping from block index to the field it's currently occupying (or None)."""
         state = {}
-        for block_idx, body_id in self.block_ids.items():
-            try:
-                block_pos, _ = p.getBasePositionAndOrientation(body_id, physicsClientId=self.client)
-                block_xy = np.array(block_pos[:2])
-                block_z = block_pos[2]
-            except Exception:
-                state[block_idx] = None
-                continue
-
-            # Check if it's on any target
-            matched = False
-            for target_idx, target_pos in enumerate(self.target_locations_pos):
-                dist_xy = np.linalg.norm(block_xy - np.array(target_pos[:2]))
-                on_surface = abs(block_z - (self.table_height + self.block_half_extents[2])) < 0.02
-                if dist_xy < self.goal_dist_threshold and on_surface:
-                    state[block_idx] = target_idx
-                    matched = True
-                    break
-
-            if not matched:
-                # Optionally check dumps here if needed
-                state[block_idx] = None
-
+        for fid, field in self.fields.items():
+            block_idx = field.get("block_id")
+            if block_idx is not None:
+                state[block_idx] = fid
         return state
 
     def _get_obs(self):
@@ -1294,8 +1218,12 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             roll=0,
             upAxisIndex=2
         )
+
         proj_matrix = p.computeProjectionMatrixFOV(
-            fov=60, aspect=1.0, nearVal=0.1, farVal=2.0
+            fov=self.config['camera']['fov'],  # Lower FOV for less distortion
+            aspect=1.0,
+            nearVal=0.1,
+            farVal=2.0
         )
         _, _, rgb, _, _ = p.getCameraImage(width, height, view_matrix, proj_matrix, physicsClientId=self.client)
         rgb_array = np.array(rgb).astype(np.uint8)[:, :, :3]  # Drop alpha if needed

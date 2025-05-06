@@ -22,7 +22,7 @@ except ImportError:
 ENV_ID = "PhysicsBlockRearrangement-v0"
 NUM_EPISODES = 5000
 MAX_STEPS_PER_EPISODE = 100
-TASK_CONFIG_FILE = "place_3_line.yaml" # Use default task
+TASK_CONFIG_FILE = "place_easy.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
@@ -150,6 +150,11 @@ def run_stability_test():
                     if step_count % 100 == 0: print(".", end="", flush=True)
 
                 # --- End Step Loop ---
+                print(f"Episode terminated: {terminated}")
+                print(f"Episode truncated: {truncated}")
+                print(f"Goal Config: {env.unwrapped.goal_config}")
+                print(f"State: {env.unwrapped.get_state()}")
+                print(f"Fields: {env.unwrapped.fields}")
                 ep_duration = time.time() - start_ep_time
                 print(f" Finished Ep {episode + 1} ({step_count} steps) in {ep_duration:.2f}s.")
                 # Don't print term/trunc reason unless verbose mode desired

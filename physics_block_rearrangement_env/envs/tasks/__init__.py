@@ -1,1 +1,1 @@
-from .block_placement_task import BlockPlacementTask
+from .grid_field_movement_task import GridFieldMovementTask

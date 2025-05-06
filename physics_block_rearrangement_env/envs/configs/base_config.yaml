@@ -51,9 +51,10 @@ robot:
 camera:
   image_size: 56
   target_pos: [0.5, 0.0, 0.5]
-  distance: 0.95
+  distance: 2.0
   yaw: 90
   pitch: -90
+  fov: 30
 
 # Default Scene assets
 assets:
@@ -64,6 +65,8 @@ assets:
 
 # Colors (can be overridden by task)
 colors:
+  random_color: True
+  max_colors: 10
   block_rgba:
     - [0.9, 0.1, 0.1, 1.0] # Red
     - [0.1, 0.8, 0.1, 1.0] # Green

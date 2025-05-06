@@ -1,0 +1,10 @@
+task:
+  name: "Place 3 blocks among 5 targets (medium)"
+  task_class_name: "GridFieldMovementTask"
+  num_blocks: 3
+  num_targets: 5
+
+  grid_size: [4, 4]
+  field_spacing: 0.08
+
+  max_episode_steps: 80
