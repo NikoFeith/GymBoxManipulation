@@ -9,3 +9,7 @@ task:
   grid_size: [3, 3]
   field_spacing: 0.08
   max_episode_steps: 100
+
+colors:
+  random_color: True
+  max_colors: 8

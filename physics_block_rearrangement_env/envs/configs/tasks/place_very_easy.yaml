@@ -2,11 +2,15 @@ task:
   name: "Place 3 blocks on correct fields (very easy)"
   task_class_name: "GridFieldMovementTask"
   num_blocks: 2
-  num_targets: 2
-  allow_occupied: True
+  num_targets: 3
+  allow_occupied: False
   max_occupied: 1
 
-  grid_size: [2, 2]
+  grid_size: [3, 3]
   field_spacing: 0.08
 
   max_episode_steps: 100
+
+colors:
+  random_color: True
+  max_colors: 4

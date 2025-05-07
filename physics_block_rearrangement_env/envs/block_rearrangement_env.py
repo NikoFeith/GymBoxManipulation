@@ -410,7 +410,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 for i in range(n)
             ]
 
-        max_count = colors.get("max_count", 10)
+        max_count = colors.get("max_colors", 10)
 
         if not colors.get("random_color"):
             block_colors = colors.get("block_rgba", default_block_colors)

@@ -10,3 +10,7 @@ task:
   field_spacing: 0.08
 
   max_episode_steps: 100
+
+colors:
+  random_color: True
+  max_colors: 6
