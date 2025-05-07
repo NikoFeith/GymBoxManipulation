@@ -67,15 +67,9 @@ assets:
 colors:
   random_color: True
   max_colors: 10
-  block_rgba:
+  colors_rgba:
     - [0.9, 0.1, 0.1, 1.0] # Red
     - [0.1, 0.8, 0.1, 1.0] # Green
     - [0.1, 0.1, 0.9, 1.0] # Blue
     - [0.9, 0.9, 0.1, 1.0] # Yellow
     - [0.9, 0.1, 0.9, 1.0] # Magenta
-  target_rgba:
-    - [0.9, 0.5, 0.5, 1.0] # Light Red
-    - [0.5, 0.9, 0.5, 1.0] # Light Green
-    - [0.5, 0.5, 0.9, 1.0] # Light Blue
-    - [0.9, 0.9, 0.5, 1.0] # Light Yellow
-    - [0.9, 0.5, 0.9, 1.0] # Light Magenta

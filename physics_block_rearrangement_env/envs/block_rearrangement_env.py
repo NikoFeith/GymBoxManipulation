@@ -397,10 +397,6 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             [0.9, 0.1, 0.1, 1.0], [0.1, 0.8, 0.1, 1.0], [0.1, 0.1, 0.9, 1.0],
             [0.9, 0.9, 0.1, 1.0], [0.9, 0.1, 0.9, 1.0]
         ]
-        default_target_colors = [
-            [0.9, 0.5, 0.5, 1.0], [0.5, 0.9, 0.5, 1.0], [0.5, 0.5, 0.9, 1.0],
-            [0.9, 0.9, 0.5, 1.0], [0.9, 0.5, 0.9, 1.0]
-        ]
 
         def generate_colors(n, light=False, alpha=1.0):
             s = 0.6 if light else 1.0
@@ -410,23 +406,20 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 for i in range(n)
             ]
 
-        max_count = colors.get("max_colors", 10)
+        max_colors = colors.get("max_colors", 10)
 
         if not colors.get("random_color"):
-            block_colors = colors.get("block_rgba", default_block_colors)
-            target_colors = colors.get("target_rgba", default_target_colors)
+            raw_colors = colors.get("colors_rgba", default_block_colors)
+
         else:
-            block_colors = generate_colors(max_count, light=False)
-            target_colors = generate_colors(max_count, light=True)
+            raw_colors = generate_colors(max_colors, light=True)
 
-        self.raw_block_colors = block_colors.copy()
-        self.raw_target_colors = target_colors.copy()
+        self.raw_colors_rgba = raw_colors.copy()
 
-        self.block_colors_rgba = block_colors
-        self.target_colors_rgba = target_colors
+        self.colors_rgba = raw_colors
 
-        logger.info(
-            f"Generated {len(self.block_colors_rgba)} block colors and {len(self.target_colors_rgba)} target colors.")
+
+        logger.info(f"Generated {len(self.colors_rgba)} colors.")
 
     # endregion
 
@@ -469,7 +462,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             target_ori = p.getQuaternionFromEuler([0, 0, self.task.grid_rotation_rad])
 
             # Default to gray if no color can be assigned
-            rgba = self.target_colors_rgba[target_idx % len(self.target_colors_rgba)] if target_idx != -1 else [0.5,
+            rgba = self.colors_rgba[target_idx % len(self.colors_rgba)] if target_idx != -1 else [0.5,
                                                                                                                 0.5,
                                                                                                                 0.5,
                                                                                                                 0.5]
@@ -506,7 +499,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # Track used and unused target_ids
         used_target_ids = set(block_to_target_id.values())
-        all_target_ids = set(range(len(self.block_colors_rgba)))
+        all_target_ids = set(range(len(self.colors_rgba)))
         unused_target_ids = list(all_target_ids - used_target_ids)
         unused_color_cycle = iter(unused_target_ids) if unused_target_ids else iter([0])
 
@@ -531,13 +524,13 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     # Determine color: goal-matched or fallback from unused target colors
                     target_id = block_to_target_id.get(block_idx, None)
                     if target_id is not None:
-                        rgba = self.block_colors_rgba[target_id % len(self.block_colors_rgba)]
+                        rgba = self.colors_rgba[target_id % len(self.colors_rgba)]
                     else:
                         try:
                             fallback_id = next(unused_color_cycle)
                         except StopIteration:
                             fallback_id = 0
-                        rgba = self.block_colors_rgba[fallback_id % len(self.block_colors_rgba)]
+                        rgba = self.colors_rgba[fallback_id % len(self.colors_rgba)]
                         logger.debug(f"Assigned fallback color {rgba} to distractor block {block_idx}")
 
                     p.changeVisualShape(body_id, -1, rgbaColor=rgba, physicsClientId=self.client)
@@ -593,10 +586,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         wait_steps(150, client=self.client, timestep=self.timestep, use_gui=self.use_gui)
 
         # Random color permutation to avoid ID-color overfitting
-        perm = np.random.permutation(len(self.block_colors_rgba))
+        perm = np.random.permutation(len(self.colors_rgba))
 
-        self.block_colors_rgba = [self.raw_block_colors[i] for i in perm]
-        self.target_colors_rgba = [self.raw_target_colors[i] for i in perm]
+        self.colors_rgba = [self.raw_colors_rgba[i] for i in perm]
 
         # --- Visualize ---
         self._place_target_visuals(task_info["target_field_ids"])
