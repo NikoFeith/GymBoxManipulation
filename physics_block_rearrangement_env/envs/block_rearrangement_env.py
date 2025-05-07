@@ -431,14 +431,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # endregion
 
     # region TASK HELPERS
-    def get_block_at_position(self, position, threshold=0.03):
+    def get_body_id_at_position(self, position, threshold=0.03):
         """
-        Returns the block ID at a given (x, y, z) position, or None if no match is found.
+        Returns the body ID at a given (x, y, z) position, or None if no match is found.
         """
-        for block_id in self.block_ids.values():
-            pos, _ = p.getBasePositionAndOrientation(block_id, physicsClientId=self.client)
+        for body_id in self.block_ids.values():
+            pos, _ = p.getBasePositionAndOrientation(body_id, physicsClientId=self.client)
             if np.linalg.norm(np.array(pos[:2]) - np.array(position[:2])) <= threshold:
-                return block_id
+                return body_id
         return None
 
     def _place_target_visuals(self, target_field_ids):
@@ -486,7 +486,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                     physicsClientId=self.client
                 )
                 if plate_id >= 0:
-                    self.target_ids[target_idx] = {'plate_id': plate_id, 'vis_id': vis_id}
+                    self.target_ids[target_idx] = {'plate_id': plate_id, 'vis_id': vis_id, 'field_id': field_id}
                 else:
                     logger.warning(f"Failed to create visual for target field {field_id} (plate_id < 0)")
             except Exception as e:
@@ -611,7 +611,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         return obs, info
 
     def _clear_sim_objects(self):
-        """Removes blocks, targets, and grasp constraints from the simulation."""
+        """Removes all blocks, targets, and grasp constraints from the simulation."""
         if self.grasp_constraint_id is not None:
             try:
                 p.removeConstraint(self.grasp_constraint_id, physicsClientId=self.client)
@@ -619,20 +619,32 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                 pass
             self.grasp_constraint_id = None
 
-        for block_id in self.block_ids.values():
+        # Remove all block bodies
+        if hasattr(self, "block_ids"):
+            all_block_body_ids = list(self.block_ids.values())
+            self.block_ids = {}
+        else:
+            all_block_body_ids = []
+
+        # If you've spawned *additional* blocks for wrong placements, track them too!
+        if hasattr(self, "extra_block_ids"):
+            all_block_body_ids.extend(self.extra_block_ids)
+            self.extra_block_ids = []
+
+        for body_id in all_block_body_ids:
             try:
-                p.removeBody(block_id, physicsClientId=self.client)
+                p.removeBody(body_id, physicsClientId=self.client)
             except Exception:
                 pass
 
-        for visual in self.target_ids.values():
-            try:
-                p.removeBody(visual["plate_id"], physicsClientId=self.client)
-            except Exception:
-                pass
-
-        self.block_ids = {}
-        self.target_ids = {}
+        # Remove targets
+        if hasattr(self, "target_ids"):
+            for visual in self.target_ids.values():
+                try:
+                    p.removeBody(visual["plate_id"], physicsClientId=self.client)
+                except Exception:
+                    pass
+            self.target_ids = {}
 
     def _reset_robot_home(self):
         """Resets robot to home joint configuration and opens gripper."""
@@ -1297,5 +1309,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
             full_path = os.path.join(save_path, filename)
             p.saveBullet(full_path, physicsClientId=self.client)
             logger.info(f"[DEBUG] Saved .bullet snapshot: {full_path}")
+
+    def _get_all_body_ids(self):
+        num_bodies = p.getNumBodies(physicsClientId=self.client)
+        return [p.getBodyUniqueId(i, physicsClientId=self.client) for i in range(num_bodies)]
 
     # endregion

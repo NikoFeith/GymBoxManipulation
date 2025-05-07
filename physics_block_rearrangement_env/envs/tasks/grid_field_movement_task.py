@@ -1,3 +1,5 @@
+import logging
+
 from ..task_interface import BaseTask
 import numpy as np
 import random
@@ -14,6 +16,8 @@ class GridFieldMovementTask(BaseTask):
         self.fields = {}
         self.grid_size = self.config.get("grid_size", [3, 3])
         self.spacing = self.config.get("field_spacing", 0.08)
+        self.allow_occupied = self.config.get("allow_occupied", False)
+        self.max_occupied = self.config.get("max_occupied", 1)
         self.base_xy = np.array(self.env.table_start_pos[:2])
         self.grid_rotation_rad = 0
         self.z = self.env.table_height + self.env.block_half_extents[2] + 0.01
@@ -67,41 +71,39 @@ class GridFieldMovementTask(BaseTask):
         self.setup_field_grid()
 
         all_field_ids = list(self.fields.keys())
-        if self.num_targets + self.num_blocks > len(all_field_ids):
-            raise ValueError("Too few fields for chosen number of targets + blocks.")
 
-        # === Sample fields ===
+        # === Safety checks based on config flags ===
+        if not self.allow_occupied:
+            if self.num_targets + self.num_blocks > len(all_field_ids):
+                raise ValueError("Too few fields for chosen number of targets + blocks.")
+        else:
+            if self.num_blocks > len(all_field_ids):
+                raise ValueError("Too few fields for blocks when target fields can be reused.")
+
+        # === Sample target fields ===
         target_fields = random.sample(all_field_ids, self.num_targets)
-        remaining_fields = [fid for fid in all_field_ids if fid not in target_fields]
-        block_fields = random.sample(remaining_fields, self.num_blocks)
 
-        # === Assign stable randomized target IDs (for visual/color consistency)
-        shuffled_target_ids = list(range(self.num_targets))
-        random.shuffle(shuffled_target_ids)
-        for fid, tid in zip(target_fields, shuffled_target_ids):
-            self.fields[fid]["target_id"] = tid
+        # === Assign target IDs ===
+        for i, fid in enumerate(target_fields):
+            self.fields[fid]["target_id"] = i
 
-        # === Assign block IDs
-        for idx, fid in enumerate(block_fields):
-            self.fields[fid]["block_id"] = idx
+        # === Clear all block IDs ===
+        for f in self.fields.values():
+            f["block_id"] = None
 
-        # === Create stable goal_config {target_id: block_id}
-        # only for matching pairs
-        goal_config = {}
-        matching_count = min(len(target_fields), len(block_fields))
-        matching_targets = random.sample(target_fields, matching_count)
-        matching_blocks = random.sample(block_fields, matching_count)
+        # === Recursive block placement ===
+        blocks_to_place = list(range(self.num_blocks))
+        available_fields = list(self.fields.keys())
+        self._recursive_place_blocks(blocks_to_place, available_fields)
 
-        for t_fid, b_fid in zip(matching_targets, matching_blocks):
-            target_id = self.fields[t_fid]["target_id"]
-            block_id = self.fields[b_fid]["block_id"]
-            goal_config[target_id] = block_id
+        # === Define goal_config: target_id i → block_id i ===
+        goal_config = {i: i for i in range(min(self.num_targets, self.num_blocks))}
 
         return {
             "fields": self.fields.copy(),
             "goal_config": goal_config,
             "target_field_ids": target_fields,
-            "block_field_ids": block_fields,
+            "block_field_ids": [fid for fid in self.fields if self.fields[fid].get("block_id") is not None],
         }
 
     def move_block_between_fields(self, block_id, field_from, field_to):
@@ -125,7 +127,10 @@ class GridFieldMovementTask(BaseTask):
 
             target_field = matched_fields[0]
             target_pos = self.fields[target_field]["position"]
-            actual_block_id = self.env.get_block_at_position(target_pos, threshold=0.03)
+            actual_body_id = self.env.get_body_id_at_position(target_pos, threshold=0.05 )
+
+            body_to_block = {v: k for k, v in self.env.block_ids.items()}
+            actual_block_id = body_to_block.get(actual_body_id, None)
 
             logger.debug(
                 f"[GOAL CHECK] target_id {target_id} → expected block {expected_block_id}, found {actual_block_id}")
@@ -134,4 +139,43 @@ class GridFieldMovementTask(BaseTask):
                 return False
 
         return True
+
+
+    # Helper Functions
+    def _recursive_place_blocks(self, blocks_to_place, available_fields, used_fields=None):
+        if used_fields is None:
+            used_fields = set()
+
+        if not blocks_to_place:
+            return  # Base case: done placing
+
+        block_id = blocks_to_place[0]
+        random.shuffle(available_fields)
+
+        for fid in available_fields:
+            if fid in used_fields:
+                continue
+
+            target_id = self.fields[fid].get("target_id")
+
+            if not self.allow_occupied:
+                if target_id is not None:
+                    continue  # Target fields are reserved
+            else:
+                if target_id == block_id:
+                    continue  # Don't pre-place block on its correct target
+
+            # Place block
+            self.fields[fid]["block_id"] = block_id
+            used_fields.add(fid)
+
+            try:
+                self._recursive_place_blocks(blocks_to_place[1:], available_fields, used_fields)
+                return  # Success
+            except RuntimeError:
+                # Backtrack
+                self.fields[fid]["block_id"] = None
+                used_fields.remove(fid)
+
+        raise RuntimeError(f"Failed to place block {block_id} with current constraints.")
 

@@ -1,10 +1,12 @@
 task:
   name: "Place 4 blocks among 6 targets (hard)"
   task_class_name: "GridFieldMovementTask"
-  num_blocks: 4
-  num_targets: 6
+  num_blocks: 7
+  num_targets: 7
+  allow_occupied: True
+  max_occupied: 4
 
-  grid_size: [4, 5]
+  grid_size: [3, 3]
   field_spacing: 0.08
 
   max_episode_steps: 100
