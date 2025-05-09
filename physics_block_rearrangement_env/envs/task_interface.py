@@ -50,7 +50,7 @@ class BaseTask(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def check_goal(self) -> bool:
+    def check_goal(self) -> (bool, float):
         """
         Check if the current state meets this task's specific goal condition.
 
@@ -59,6 +59,7 @@ class BaseTask(ABC):
 
         Returns:
             bool: True if the goal is met, False otherwise.
+            float: percentage of correct placed blocks.
         """
         raise NotImplementedError
 

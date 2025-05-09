@@ -22,7 +22,7 @@ simulation:
 rewards:
   goal_reward: 1.0
   step_penalty: -0.01
-  move_fail_penalty: -0.005
+  sparse_reward: y
 
 # Robot hardware and default control parameters
 robot:

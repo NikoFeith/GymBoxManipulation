@@ -117,17 +117,22 @@ class GridFieldMovementTask(BaseTask):
         self.fields[field_from]["block_id"] = None
 
     def check_goal(self):
-        """Check if each goal-mapped target ID is occupied by the correct block ID."""
+        """Check if each goal-mapped target ID is occupied by the correct block ID.
+        Returns:
+            success (bool): whether the goal is fully satisfied
+            correct_count (int): how many blocks are correctly placed
+        """
+        correct_count = 0
+
         for target_id, expected_block_id in self.env.goal_config.items():
-            # Find the field with this target ID
             matched_fields = [fid for fid, data in self.fields.items() if data.get("target_id") == target_id]
             if not matched_fields:
                 logger.warning(f"No field found with target_id {target_id}")
-                return False
+                return False, 0  # invalid setup
 
             target_field = matched_fields[0]
             target_pos = self.fields[target_field]["position"]
-            actual_body_id = self.env.get_body_id_at_position(target_pos, threshold=0.05 )
+            actual_body_id = self.env.get_body_id_at_position(target_pos, threshold=0.05)
 
             body_to_block = {v: k for k, v in self.env.block_ids.items()}
             actual_block_id = body_to_block.get(actual_body_id, None)
@@ -135,11 +140,13 @@ class GridFieldMovementTask(BaseTask):
             logger.debug(
                 f"[GOAL CHECK] target_id {target_id} → expected block {expected_block_id}, found {actual_block_id}")
 
-            if actual_block_id != expected_block_id:
-                return False
+            if actual_block_id == expected_block_id:
+                correct_count += 1
 
-        return True
-
+        success = (correct_count == len(self.env.goal_config))
+        total_goals = len(self.env.goal_config)
+        correct_ratio = correct_count / total_goals if total_goals > 0 else 0.0
+        return success, correct_ratio
 
     # Helper Functions
     def _recursive_place_blocks(self, blocks_to_place, available_fields, used_fields=None):

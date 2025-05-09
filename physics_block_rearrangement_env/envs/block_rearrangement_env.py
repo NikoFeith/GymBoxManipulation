@@ -382,7 +382,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         # Rewards
         self.goal_reward = reward_cfg.get("goal_reward", 1.0)
         self.step_penalty = reward_cfg.get("step_penalty", -0.01)
-        self.move_fail_penalty = reward_cfg.get("move_fail_penalty", 0.005)
+        self.sparse_reward = reward_cfg.get("sparse_reward", True)
 
     from colorsys import hsv_to_rgb
 
@@ -682,7 +682,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         if fields[field_to_id]["block_id"] is not None:
             logger.warning(f"Place failed: target field {field_to_id} already occupied")
-            return self._get_obs(), self.step_penalty + self.move_fail_penalty, False, False, {
+            return self._get_obs(), self.step_penalty, False, False, {
                 "failed": "occupied_target"}
 
         # === Try pick ===
@@ -698,18 +698,20 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         # === Success & termination ===
         success = success_pick and success_place
-        terminated = self.task.check_goal()
+        terminated, correct_ratio = self.task.check_goal()
         truncated = False  # Add max_steps logic if needed
 
         # === Reward logic ===
-        reward = self.goal_reward if terminated else self.step_penalty
-        if not success:
-            reward += self.move_fail_penalty
+        if self.sparse_reward:
+            reward = self.goal_reward if terminated else self.step_penalty
+        else:
+            reward = self.step_penalty
 
         info = {
             "primitive_success": success,
             "pick_success": success_pick,
             "place_success": success_place,
+            "correct_ratio": correct_ratio,
         }
 
         return self._get_obs(), reward, terminated, truncated, info
