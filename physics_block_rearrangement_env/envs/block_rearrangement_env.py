@@ -357,7 +357,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         """
         task_cfg = self.config.get("task", {})
         sim_cfg = self.config.get("simulation", {})
-        reward_cfg = self.config.get("reward", {})
+        reward_cfg = self.config.get("rewards", {})
 
         self.target_layout = task_cfg.get("target_layout", "line")
         self.num_blocks = task_cfg.get("num_blocks", 1)
@@ -370,9 +370,9 @@ class PhysicsBlockRearrangementEnv(gym.Env):
         self.grasp_clearance_above_top = sim_cfg.get("grasp_clearance_above_top", 0.1)
         self.place_clearance_above_top = sim_cfg.get("place_clearance_above_top", 0.1)
 
-        self.primitive_max_steps = sim_cfg.get("primitive_max_steps", 400)
+        self.primitive_max_steps = sim_cfg.get("primitive_max_steps", 10)
         self.max_steps = sim_cfg.get("max_episode_steps", 50 * self.num_blocks)
-        self.gripper_wait_steps = sim_cfg.get("gripper_wait_steps", 120)
+        self.gripper_wait_steps = sim_cfg.get("gripper_wait_steps", 10)
 
         # Pose tolerances
         self.pose_reached_threshold = sim_cfg.get("pose_reached_threshold", 0.01)
@@ -424,15 +424,14 @@ class PhysicsBlockRearrangementEnv(gym.Env):
     # endregion
 
     # region TASK HELPERS
-    def get_body_id_at_position(self, position, threshold=0.03):
+    def get_all_block_positions(self):
         """
-        Returns the body ID at a given (x, y, z) position, or None if no match is found.
+        Returns a dict: body_id → (x, y, z) positions for all blocks.
         """
-        for body_id in self.block_ids.values():
-            pos, _ = p.getBasePositionAndOrientation(body_id, physicsClientId=self.client)
-            if np.linalg.norm(np.array(pos[:2]) - np.array(position[:2])) <= threshold:
-                return body_id
-        return None
+        return {
+            body_id: p.getBasePositionAndOrientation(body_id, physicsClientId=self.client)[0]
+            for body_id in self.block_ids.values()
+        }
 
     def _place_target_visuals(self, target_field_ids):
         """Places visual markers (plates) at the field locations assigned to targets."""
@@ -1061,7 +1060,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
 
         wait_steps(50, self.client, timestep=self.timestep, use_gui=self.use_gui)
 
-    def _move_ee_to_pose(self, target_pos, target_ori, max_steps_override=None):
+    def _move_ee_to_pose(self, target_pos, target_ori):
         """Computes IK and moves arm to the target pose. Returns True if pose reached."""
         self._last_ik_failure = False
 
@@ -1099,9 +1098,7 @@ class PhysicsBlockRearrangementEnv(gym.Env):
                                     velocityGains=self.arm_kd,
                                     physicsClientId=self.client)
 
-        max_steps = max_steps_override or self.primitive_max_steps
-        wait_steps(max_steps, self.client, timestep=self.timestep, use_gui=self.use_gui)
-
+        wait_steps(self.primitive_max_steps, self.client, timestep=self.timestep, use_gui=self.use_gui)
         # Final pose check
         try:
             final_pos, final_ori = p.getLinkState(self.robot_id, self.ee_link_index, computeForwardKinematics=True,

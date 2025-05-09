@@ -20,13 +20,13 @@ except ImportError:
 
 # --- Test Configuration ---
 ENV_ID = "PhysicsBlockRearrangement-v0"
-NUM_EPISODES = 5000
-MAX_STEPS_PER_EPISODE = 1
+NUM_EPISODES = 100
+MAX_STEPS_PER_EPISODE = 100
 TASK_CONFIG_FILE = "place_medium.yaml" # Use default task
 
 # --- Visualization Options ---
 VISUALIZE_OBS = True  # <<< Set to True to see observations, False for max speed stability test
-USE_GUI = True
+USE_GUI = False
 RENDER_EVERY = 10  # ← render every 10 episodes
 DISPLAY_WIDTH = 336   # Display size if VISUALIZE_OBS is True
 DISPLAY_HEIGHT = 336
@@ -114,7 +114,6 @@ def run_stability_test():
                 terminated = False
                 truncated = False
                 step_count = 0
-                print(f"Goal Config: {env.unwrapped.goal_config}")
                 while not terminated and not truncated and step_count < MAX_STEPS_PER_EPISODE:
                     action = env.action_space.sample()
                     obs, reward, terminated, truncated, info = env.step(action)
@@ -150,10 +149,6 @@ def run_stability_test():
                     if step_count % 100 == 0: print(".", end="", flush=True)
 
                 # --- End Step Loop ---
-                print(f"Episode terminated: {terminated}")
-                print(f"Episode truncated: {truncated}")
-                print(f"State: {env.unwrapped.get_state()}")
-                print(f"Fields: {env.unwrapped.fields}")
                 ep_duration = time.time() - start_ep_time
                 print(f" Finished Ep {episode + 1} ({step_count} steps) in {ep_duration:.2f}s.")
                 # Don't print term/trunc reason unless verbose mode desired

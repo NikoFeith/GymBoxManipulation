@@ -21,6 +21,7 @@ class GridFieldMovementTask(BaseTask):
         self.base_xy = np.array(self.env.table_start_pos[:2])
         self.grid_rotation_rad = 0
         self.z = self.env.table_height + self.env.block_half_extents[2] + 0.01
+        self.target_id_to_field = {}
 
     def _load_task_params(self):
         """Load parameters specific to the grid-based task."""
@@ -87,6 +88,11 @@ class GridFieldMovementTask(BaseTask):
         for i, fid in enumerate(target_fields):
             self.fields[fid]["target_id"] = i
 
+        self.target_id_to_field = {
+            self.fields[fid]["target_id"]: fid
+            for fid in target_fields
+        }
+
         # === Clear all block IDs ===
         for f in self.fields.values():
             f["block_id"] = None
@@ -117,36 +123,26 @@ class GridFieldMovementTask(BaseTask):
         self.fields[field_from]["block_id"] = None
 
     def check_goal(self):
-        """Check if each goal-mapped target ID is occupied by the correct block ID.
-        Returns:
-            success (bool): whether the goal is fully satisfied
-            correct_count (int): how many blocks are correctly placed
-        """
-        correct_count = 0
+        block_pos = self.env.get_all_block_positions()
+        body_to_block = {v: k for k, v in self.env.block_ids.items()}
+
+        matched = 0
+        total = len(self.env.goal_config)
 
         for target_id, expected_block_id in self.env.goal_config.items():
-            matched_fields = [fid for fid, data in self.fields.items() if data.get("target_id") == target_id]
-            if not matched_fields:
-                logger.warning(f"No field found with target_id {target_id}")
-                return False, 0  # invalid setup
+            target_fid = self.target_id_to_field[target_id]  # precomputed once at reset
+            target_pos = self.fields[target_fid]["position"]
 
-            target_field = matched_fields[0]
-            target_pos = self.fields[target_field]["position"]
-            actual_body_id = self.env.get_body_id_at_position(target_pos, threshold=0.05)
+            found = None
+            for body_id, pos in block_pos.items():
+                if np.linalg.norm(np.array(pos[:2]) - np.array(target_pos[:2])) <= 0.03:
+                    block_id = body_to_block[body_id]
+                    if block_id == expected_block_id:
+                        matched += 1
+                    break  # only check the closest match
 
-            body_to_block = {v: k for k, v in self.env.block_ids.items()}
-            actual_block_id = body_to_block.get(actual_body_id, None)
-
-            logger.debug(
-                f"[GOAL CHECK] target_id {target_id} → expected block {expected_block_id}, found {actual_block_id}")
-
-            if actual_block_id == expected_block_id:
-                correct_count += 1
-
-        success = (correct_count == len(self.env.goal_config))
-        total_goals = len(self.env.goal_config)
-        correct_ratio = correct_count / total_goals if total_goals > 0 else 0.0
-        return success, correct_ratio
+        correct_ratio = matched / total if total > 0 else 0.0
+        return matched == total, correct_ratio
 
     # Helper Functions
     def _recursive_place_blocks(self, blocks_to_place, available_fields, used_fields=None):
